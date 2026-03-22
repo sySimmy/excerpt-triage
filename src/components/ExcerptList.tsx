@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useEffect } from "react";
+import type { TranslationState } from "@/app/page";
 
 interface ExcerptItem {
   id: number;
@@ -19,6 +20,7 @@ interface ExcerptListProps {
   onLoadMore: () => void;
   hasMore: boolean;
   loading: boolean;
+  translations?: Map<number, TranslationState>;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -46,7 +48,7 @@ function stars(n: number): string {
   return "★".repeat(n) + "☆".repeat(5 - n);
 }
 
-export default function ExcerptList({ items, selectedId, onSelect, onLoadMore, hasMore, loading }: ExcerptListProps) {
+export default function ExcerptList({ items, selectedId, onSelect, onLoadMore, hasMore, loading, translations }: ExcerptListProps) {
   const listRef = useRef<HTMLDivElement>(null);
 
   const handleScroll = useCallback(() => {
@@ -86,6 +88,12 @@ export default function ExcerptList({ items, selectedId, onSelect, onLoadMore, h
                 <span className="px-1.5 py-0.5 bg-[var(--bg-tertiary)] rounded">
                   {SOURCE_LABELS[item.source_type ?? ""] ?? item.source_type ?? "?"}
                 </span>
+                {translations?.get(item.id)?.status === "done" && (
+                  <span className="px-1.5 py-0.5 bg-orange-500/15 text-orange-400 rounded text-[10px]">已译</span>
+                )}
+                {translations?.get(item.id)?.status === "translating" && (
+                  <span className="px-1.5 py-0.5 bg-orange-500/15 text-orange-400/60 rounded text-[10px]">翻译中</span>
+                )}
                 {item.signal > 0 && (
                   <span className="text-yellow-400/70">{stars(item.signal)}</span>
                 )}
