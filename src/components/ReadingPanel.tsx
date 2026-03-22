@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import TagEditor from "./TagEditor";
 import SignalRating from "./SignalRating";
+import type { TranslationState } from "@/app/page";
 
 interface ExcerptDetail {
   id: number;
@@ -29,6 +30,8 @@ interface ReadingPanelProps {
   onDeleted?: () => void;
   onNext?: () => void;
   archiveMode?: boolean;
+  translationState?: TranslationState;
+  onTranslate?: (id: number, content: string) => void;
 }
 
 const SOURCE_OPTIONS = [
@@ -40,7 +43,7 @@ const SOURCE_OPTIONS = [
   { value: "report", label: "Report" },
 ];
 
-export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, onDeleted, onNext, archiveMode }: ReadingPanelProps) {
+export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, onDeleted, onNext, archiveMode, translationState, onTranslate }: ReadingPanelProps) {
   const [excerpt, setExcerpt] = useState<ExcerptDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
@@ -50,9 +53,27 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
   const [deleting, setDeleting] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
   const [candidates, setCandidates] = useState<string[]>([]);
-  const [translating, setTranslating] = useState(false);
-  const [translation, setTranslation] = useState<string | null>(null);
   const [showTranslation, setShowTranslation] = useState(false);
+
+  // AI tag tracking state
+  const [tagsBeforeAI, setTagsBeforeAI] = useState<string[]>([]);
+  const [aiSuggestedTags, setAiSuggestedTags] = useState<string[]>([]);
+  const [allAiCandidates, setAllAiCandidates] = useState<string[]>([]);
+  const [acceptedCands, setAcceptedCands] = useState<string[]>([]);
+  const [dismissedCands, setDismissedCands] = useState<string[]>([]);
+
+  // Derive translation info from lifted state
+  const translating = translationState?.status === "translating";
+  const translation = translationState?.status === "done" ? translationState.text ?? null : null;
+
+  // Auto-show translation when it completes
+  const prevStatusRef = useRef(translationState?.status);
+  useEffect(() => {
+    if (prevStatusRef.current === "translating" && translationState?.status === "done") {
+      setShowTranslation(true);
+    }
+    prevStatusRef.current = translationState?.status;
+  }, [translationState?.status]);
 
   // Detect if content is mostly English
   function isEnglishContent(text: string): boolean {
@@ -65,33 +86,13 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
   }
 
   // Translate content
-  async function handleTranslate() {
-    if (!excerpt || translating) return;
+  function handleTranslate() {
+    if (!excerpt || !excerptId || translating) return;
     if (translation) {
       setShowTranslation(!showTranslation);
       return;
     }
-    setTranslating(true);
-    try {
-      const res = await fetch("/api/translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: excerpt.content }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTranslation(data.translation);
-        setShowTranslation(true);
-        // Save translation to file
-        await fetch(`/api/excerpts/${excerptId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ translation: data.translation }),
-        });
-      }
-    } finally {
-      setTranslating(false);
-    }
+    onTranslate?.(excerptId, excerpt.content);
   }
 
   // AI tag suggestion
@@ -99,6 +100,8 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
     if (!excerpt || suggesting) return;
     setSuggesting(true);
     setCandidates([]);
+    // Snapshot tags before AI
+    setTagsBeforeAI([...tags]);
     try {
       const res = await fetch("/api/suggest-tags", {
         method: "POST",
@@ -113,9 +116,11 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
         const data = await res.json();
         if (data.tags?.length > 0) {
           setTags((prev) => [...prev, ...data.tags]);
+          setAiSuggestedTags((prev) => [...prev, ...data.tags]);
         }
         if (data.candidates?.length > 0) {
           setCandidates(data.candidates);
+          setAllAiCandidates((prev) => [...prev, ...data.candidates]);
         }
       }
     } finally {
@@ -126,10 +131,12 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
   function acceptCandidate(candidate: string) {
     setTags((prev) => [...prev, candidate]);
     setCandidates((prev) => prev.filter((c) => c !== candidate));
+    setAcceptedCands((prev) => [...prev, candidate]);
   }
 
   function dismissCandidate(candidate: string) {
     setCandidates((prev) => prev.filter((c) => c !== candidate));
+    setDismissedCands((prev) => [...prev, candidate]);
   }
 
   // Load excerpt
@@ -139,9 +146,14 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
       return;
     }
     setLoading(true);
-    setTranslation(null);
     setShowTranslation(false);
     setCandidates([]);
+    // Reset AI tracking
+    setTagsBeforeAI([]);
+    setAiSuggestedTags([]);
+    setAllAiCandidates([]);
+    setAcceptedCands([]);
+    setDismissedCands([]);
     fetch(`/api/excerpts/${excerptId}`)
       .then((r) => r.json())
       .then((data) => {
@@ -173,11 +185,41 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
     return () => clearTimeout(timer);
   }, [tags, signal, sourceType, saveChanges, excerpt]);
 
+  // Save tag feedback (AI vs manual diff)
+  async function saveTagFeedback(finalTags: string[]) {
+    if (aiSuggestedTags.length === 0 && allAiCandidates.length === 0) return; // AI wasn't used
+    const userRemoved = aiSuggestedTags.filter(t => !finalTags.includes(t));
+    const allAiRelated = new Set([...tagsBeforeAI, ...aiSuggestedTags, ...acceptedCands]);
+    const userAdded = finalTags.filter(t => !allAiRelated.has(t));
+    try {
+      await fetch("/api/tag-feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          excerpt_id: excerptId,
+          title: excerpt?.title ?? null,
+          tags_before_ai: tagsBeforeAI,
+          ai_suggested: aiSuggestedTags,
+          ai_candidates: allAiCandidates,
+          accepted_candidates: acceptedCands,
+          dismissed_candidates: dismissedCands,
+          user_added: userAdded,
+          user_removed: userRemoved,
+          final_tags: finalTags,
+        }),
+      });
+    } catch {
+      // non-blocking
+    }
+  }
+
   // Archive
   async function handleArchive() {
     if (!excerptId || archiving) return;
     setArchiving(true);
     try {
+      // Save tag feedback before archiving
+      await saveTagFeedback(tags);
       const res = await fetch("/api/archive", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -225,6 +267,9 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
         } else if (e.key === "t" || e.key === "T") {
           e.preventDefault();
           handleSuggestTags();
+        } else if (e.key === "f" || e.key === "F") {
+          e.preventDefault();
+          handleTranslate();
         }
         return;
       }
@@ -242,6 +287,9 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
       } else if (e.key === "t" || e.key === "T") {
         e.preventDefault();
         handleSuggestTags();
+      } else if (e.key === "f" || e.key === "F") {
+        e.preventDefault();
+        handleTranslate();
       }
     }
     window.addEventListener("keydown", handleKey);
@@ -303,7 +351,7 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
               disabled={translating}
               className="px-2.5 py-1 text-xs bg-orange-500/20 border border-orange-500/30 text-orange-300 rounded hover:bg-orange-500/30 transition-colors disabled:opacity-50"
             >
-              {translating ? "翻译中（长文分段翻译）..." : translation ? (showTranslation ? "显示原文" : "显示翻译") : "翻译全文"}
+              {translating ? "翻译中（长文分段翻译）..." : translation ? (showTranslation ? "显示原文" : "显示翻译") : translationState?.status === "error" ? "翻译失败，重试" : "翻译全文"}
             </button>
           </div>
         )}
@@ -388,8 +436,8 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
           {/* Actions */}
           <span className="text-xs text-[var(--text-secondary)]">
             {archiveMode
-              ? "1-5 评分 · T AI标签 · E 编辑标签"
-              : "S 跳过 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签"}
+              ? "1-5 评分 · T AI标签 · F 翻译 · E 编辑标签"
+              : "S 跳过 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译"}
           </span>
 
           {!archiveMode && (

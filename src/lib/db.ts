@@ -226,6 +226,277 @@ export function getArchivedExcerpts(filters: {
   return { items, total: total.count };
 }
 
+// === Activity Log ===
+
+export interface ActivityRow {
+  id: number;
+  excerpt_id: number | null;
+  action: string;
+  title: string | null;
+  source_type: string | null;
+  source_name: string | null;
+  tags: string;
+  signal: number;
+  created_at: string;
+}
+
+export function logActivity(data: {
+  excerpt_id: number;
+  action: string;
+  title: string | null;
+  source_type: string | null;
+  source_name: string | null;
+  tags: string;
+  signal: number;
+}) {
+  const db = getDb();
+  db.prepare(
+    `INSERT INTO activity_log (excerpt_id, action, title, source_type, source_name, tags, signal, created_at)
+     VALUES (@excerpt_id, @action, @title, @source_type, @source_name, @tags, @signal, datetime('now', 'localtime'))`
+  ).run(data);
+}
+
+export function getActivityByDateRange(start: string, end: string): ActivityRow[] {
+  const db = getDb();
+  return db.prepare(
+    `SELECT * FROM activity_log WHERE created_at >= @start AND created_at < @end ORDER BY created_at DESC`
+  ).all({ start, end }) as ActivityRow[];
+}
+
+export function getDailyNewCounts(days: number): { date: string; count: number }[] {
+  const db = getDb();
+  return db.prepare(
+    `SELECT date(created_at, 'localtime') as date, COUNT(*) as count
+     FROM excerpts
+     WHERE date(created_at, 'localtime') >= date('now', 'localtime', @offset)
+     GROUP BY date(created_at, 'localtime')
+     ORDER BY date ASC`
+  ).all({ offset: `-${days} days` }) as { date: string; count: number }[];
+}
+
+export function getNewCountForDate(date: string, nextDate: string): number {
+  const db = getDb();
+  const row = db.prepare(
+    `SELECT COUNT(*) as count FROM excerpts WHERE datetime(created_at, 'localtime') >= @date AND datetime(created_at, 'localtime') < @nextDate`
+  ).get({ date, nextDate }) as { count: number };
+  return row.count;
+}
+
+export function getDailyActivityCounts(days: number): { date: string; archived: number; deleted: number }[] {
+  const db = getDb();
+  return db.prepare(
+    `SELECT date(created_at) as date,
+            SUM(CASE WHEN action = 'archive' THEN 1 ELSE 0 END) as archived,
+            SUM(CASE WHEN action = 'delete' THEN 1 ELSE 0 END) as deleted
+     FROM activity_log
+     WHERE created_at >= date('now', 'localtime', @offset)
+     GROUP BY date(created_at)
+     ORDER BY date ASC`
+  ).all({ offset: `-${days} days` }) as { date: string; archived: number; deleted: number }[];
+}
+
+export function getBacklogHistory(days: number): { date: string; total: number }[] {
+  const db = getDb();
+  // Approximate: current backlog + reverse-apply daily changes
+  const currentBacklog = (db.prepare(
+    `SELECT COUNT(*) as count FROM excerpts WHERE location != 'archived'`
+  ).get() as { count: number }).count;
+
+  const dailyCounts = getDailyActivityCounts(days);
+  const result: { date: string; total: number }[] = [];
+
+  // Work backwards from today
+  let backlog = currentBacklog;
+
+  function localDateStr(d: Date): string {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  // Build map of daily net changes
+  const changeMap = new Map<string, number>();
+  for (const dc of dailyCounts) {
+    // Each archive/delete reduces backlog, so going backwards we add them back
+    changeMap.set(dc.date, dc.archived + dc.deleted);
+  }
+
+  // Generate dates for the range
+  for (let i = 0; i < days; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() - (days - 1 - i));
+    const dateStr = localDateStr(d);
+    result.push({ date: dateStr, total: 0 });
+  }
+
+  // Fill backwards
+  let runningBacklog = currentBacklog;
+  for (let i = result.length - 1; i >= 0; i--) {
+    result[i].total = runningBacklog;
+    const change = changeMap.get(result[i].date) ?? 0;
+    runningBacklog += change; // reverse: processed items were in backlog before
+  }
+
+  return result;
+}
+
+// === Tag Feedback ===
+
+export interface TagFeedbackRow {
+  id: number;
+  excerpt_id: number;
+  title: string | null;
+  tags_before_ai: string;
+  ai_suggested: string;
+  ai_candidates: string;
+  accepted_candidates: string;
+  dismissed_candidates: string;
+  user_added: string;
+  user_removed: string;
+  final_tags: string;
+  created_at: string;
+}
+
+export function saveTagFeedback(data: {
+  excerpt_id: number;
+  title: string | null;
+  tags_before_ai: string[];
+  ai_suggested: string[];
+  ai_candidates: string[];
+  accepted_candidates: string[];
+  dismissed_candidates: string[];
+  user_added: string[];
+  user_removed: string[];
+  final_tags: string[];
+}) {
+  const db = getDb();
+  db.prepare(
+    `INSERT INTO tag_feedback (excerpt_id, title, tags_before_ai, ai_suggested, ai_candidates, accepted_candidates, dismissed_candidates, user_added, user_removed, final_tags, created_at)
+     VALUES (@excerpt_id, @title, @tags_before_ai, @ai_suggested, @ai_candidates, @accepted_candidates, @dismissed_candidates, @user_added, @user_removed, @final_tags, datetime('now', 'localtime'))`
+  ).run({
+    excerpt_id: data.excerpt_id,
+    title: data.title,
+    tags_before_ai: JSON.stringify(data.tags_before_ai),
+    ai_suggested: JSON.stringify(data.ai_suggested),
+    ai_candidates: JSON.stringify(data.ai_candidates),
+    accepted_candidates: JSON.stringify(data.accepted_candidates),
+    dismissed_candidates: JSON.stringify(data.dismissed_candidates),
+    user_added: JSON.stringify(data.user_added),
+    user_removed: JSON.stringify(data.user_removed),
+    final_tags: JSON.stringify(data.final_tags),
+  });
+}
+
+export function getTagFeedbackAll(): TagFeedbackRow[] {
+  const db = getDb();
+  return db.prepare("SELECT * FROM tag_feedback ORDER BY created_at DESC").all() as TagFeedbackRow[];
+}
+
+export function getTagFeedbackAnalysis(): {
+  totalSessions: number;
+  aiUsedSessions: number;
+  avgPrecision: number;
+  avgRecall: number;
+  tagStats: Record<string, { suggested: number; kept: number; removed: number; missedThenAdded: number }>;
+  candidateStats: { total: number; accepted: number; dismissed: number };
+  recentCorrections: { title: string | null; ai_suggested: string[]; user_removed: string[]; user_added: string[]; created_at: string }[];
+  frequentUserAdds: { tag: string; count: number }[];
+  frequentAiRemoves: { tag: string; count: number }[];
+} {
+  const db = getDb();
+  const rows = db.prepare("SELECT * FROM tag_feedback ORDER BY created_at DESC").all() as TagFeedbackRow[];
+
+  const tagStats: Record<string, { suggested: number; kept: number; removed: number; missedThenAdded: number }> = {};
+  let totalPrecision = 0;
+  let totalRecall = 0;
+  let aiUsedSessions = 0;
+  let totalCandidates = 0;
+  let acceptedCandidates = 0;
+  let dismissedCandidates = 0;
+  const userAddCounts = new Map<string, number>();
+  const aiRemoveCounts = new Map<string, number>();
+  const recentCorrections: { title: string | null; ai_suggested: string[]; user_removed: string[]; user_added: string[]; created_at: string }[] = [];
+
+  for (const row of rows) {
+    const aiSuggested = JSON.parse(row.ai_suggested) as string[];
+    const finalTags = JSON.parse(row.final_tags) as string[];
+    const userAdded = JSON.parse(row.user_added) as string[];
+    const userRemoved = JSON.parse(row.user_removed) as string[];
+    const accepted = JSON.parse(row.accepted_candidates) as string[];
+    const dismissed = JSON.parse(row.dismissed_candidates) as string[];
+
+    if (aiSuggested.length === 0) continue;
+    aiUsedSessions++;
+
+    // Per-tag stats
+    const aiKept = aiSuggested.filter(t => finalTags.includes(t));
+    const aiRejected = aiSuggested.filter(t => !finalTags.includes(t));
+
+    for (const tag of aiSuggested) {
+      if (!tagStats[tag]) tagStats[tag] = { suggested: 0, kept: 0, removed: 0, missedThenAdded: 0 };
+      tagStats[tag].suggested++;
+      if (aiKept.includes(tag)) tagStats[tag].kept++;
+      if (aiRejected.includes(tag)) tagStats[tag].removed++;
+    }
+    for (const tag of userAdded) {
+      if (!tagStats[tag]) tagStats[tag] = { suggested: 0, kept: 0, removed: 0, missedThenAdded: 0 };
+      tagStats[tag].missedThenAdded++;
+      userAddCounts.set(tag, (userAddCounts.get(tag) ?? 0) + 1);
+    }
+    for (const tag of userRemoved) {
+      aiRemoveCounts.set(tag, (aiRemoveCounts.get(tag) ?? 0) + 1);
+    }
+
+    // Precision: what fraction of AI suggestions were kept
+    const precision = aiSuggested.length > 0 ? aiKept.length / aiSuggested.length : 1;
+    // Recall: what fraction of final tags (excluding pre-existing) were suggested by AI
+    const newFinalTags = finalTags.filter(t => {
+      const before = JSON.parse(row.tags_before_ai) as string[];
+      return !before.includes(t);
+    });
+    const recall = newFinalTags.length > 0 ? aiKept.length / newFinalTags.length : 1;
+
+    totalPrecision += precision;
+    totalRecall += recall;
+
+    // Candidate stats
+    totalCandidates += accepted.length + dismissed.length;
+    acceptedCandidates += accepted.length;
+    dismissedCandidates += dismissed.length;
+
+    // Recent corrections (up to 20)
+    if (recentCorrections.length < 20 && (userRemoved.length > 0 || userAdded.length > 0)) {
+      recentCorrections.push({
+        title: row.title,
+        ai_suggested: aiSuggested,
+        user_removed: userRemoved,
+        user_added: userAdded,
+        created_at: row.created_at,
+      });
+    }
+  }
+
+  const frequentUserAdds = Array.from(userAddCounts.entries())
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  const frequentAiRemoves = Array.from(aiRemoveCounts.entries())
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+
+  return {
+    totalSessions: rows.length,
+    aiUsedSessions,
+    avgPrecision: aiUsedSessions > 0 ? totalPrecision / aiUsedSessions : 0,
+    avgRecall: aiUsedSessions > 0 ? totalRecall / aiUsedSessions : 0,
+    tagStats,
+    candidateStats: { total: totalCandidates, accepted: acceptedCandidates, dismissed: dismissedCandidates },
+    recentCorrections,
+    frequentUserAdds,
+    frequentAiRemoves,
+  };
+}
+
 export function getStats(): { total: number; to_process: number; reading: number; read: number; archived: number } {
   const db = getDb();
   const rows = db.prepare("SELECT status, COUNT(*) as count FROM excerpts GROUP BY status").all() as { status: string; count: number }[];

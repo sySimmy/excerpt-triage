@@ -8,6 +8,8 @@ import FilterBar from "@/components/FilterBar";
 import ViewTabs from "@/components/ViewTabs";
 import ArchiveFilterBar from "@/components/ArchiveFilterBar";
 import ArchiveGroupList from "@/components/ArchiveGroupList";
+import StatsView from "@/components/StatsView";
+import TagFeedbackView from "@/components/TagFeedbackView";
 
 interface ExcerptItem {
   id: number;
@@ -35,8 +37,54 @@ interface TagStat {
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
+export interface TranslationState {
+  status: "translating" | "done" | "error";
+  text?: string;
+}
+
 export default function Home() {
-  const [activeView, setActiveView] = useState<"inbox" | "archive">("inbox");
+  const [activeView, setActiveView] = useState<"inbox" | "archive" | "stats" | "tag-feedback">("inbox");
+
+  // === Translation state (shared across excerpts) ===
+  const [translations, setTranslations] = useState<Map<number, TranslationState>>(new Map());
+
+  function startTranslation(id: number, content: string) {
+    setTranslations((prev) => {
+      const next = new Map(prev);
+      next.set(id, { status: "translating" });
+      return next;
+    });
+
+    fetch("/api/translate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error("translate failed");
+        return res.json();
+      })
+      .then((data) => {
+        setTranslations((prev) => {
+          const next = new Map(prev);
+          next.set(id, { status: "done", text: data.translation });
+          return next;
+        });
+        // Save translation to file (fire-and-forget)
+        fetch(`/api/excerpts/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ translation: data.translation }),
+        });
+      })
+      .catch(() => {
+        setTranslations((prev) => {
+          const next = new Map(prev);
+          next.set(id, { status: "error" });
+          return next;
+        });
+      });
+  }
 
   // === Inbox state ===
   const [filters, setFilters] = useState({ status: "", source_type: "", search: "", tag: "", captured_within: "", sort: "recent", _randomSeed: 0 });
@@ -242,6 +290,7 @@ export default function Home() {
                 onLoadMore={() => loadExcerpts(false)}
                 hasMore={hasMore}
                 loading={loading}
+                translations={translations}
               />
             </div>
             <div className="flex-1 bg-[var(--bg)]">
@@ -251,11 +300,13 @@ export default function Home() {
                 onArchived={handleArchived}
                 onDeleted={handleDeleted}
                 onNext={handleNext}
+                translationState={selectedId ? translations.get(selectedId) : undefined}
+                onTranslate={startTranslation}
               />
             </div>
           </div>
         </>
-      ) : (
+      ) : activeView === "archive" ? (
         <>
           <ArchiveFilterBar
             tagStats={archiveTagStats}
@@ -289,10 +340,20 @@ export default function Home() {
                 excerptId={archiveSelectedId}
                 tagSuggestions={tagSuggestions}
                 archiveMode
+                translationState={archiveSelectedId ? translations.get(archiveSelectedId) : undefined}
+                onTranslate={startTranslation}
               />
             </div>
           </div>
         </>
+      ) : activeView === "stats" ? (
+        <div className="flex-1 overflow-hidden">
+          <StatsView />
+        </div>
+      ) : (
+        <div className="flex-1 overflow-hidden">
+          <TagFeedbackView />
+        </div>
       )}
     </div>
   );
