@@ -35,6 +35,12 @@ export function writeFrontmatter(filePath: string, data: FrontmatterData, conten
 export function updateFrontmatterFields(filePath: string, updates: Partial<FrontmatterData>) {
   const { data, content } = parseFrontmatter(filePath);
   const merged = { ...data, ...updates };
+  // Strip undefined values — YAML cannot serialize them
+  for (const key of Object.keys(merged)) {
+    if (merged[key] === undefined) {
+      delete merged[key];
+    }
+  }
   writeFrontmatter(filePath, merged, content);
 }
 
