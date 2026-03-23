@@ -5,14 +5,15 @@ export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
 
   // Convert captured_within (days) to a date string
+  // "1" = today only, "3" = last 3 days, etc.
   let captured_after: string | undefined;
   const capturedWithin = params.get("captured_within");
   if (capturedWithin) {
     const days = Number(capturedWithin);
     if (days > 0) {
       const d = new Date();
-      d.setDate(d.getDate() - days);
-      captured_after = d.toISOString().slice(0, 10);
+      d.setDate(d.getDate() - (days - 1));
+      captured_after = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     }
   }
 
@@ -26,6 +27,7 @@ export async function GET(request: NextRequest) {
     captured_after,
     sort: params.get("sort") ?? undefined,
     exclude_archived: true,
+    exclude_deep_read: true,
     limit: params.has("limit") ? Number(params.get("limit")) : 50,
     offset: params.has("offset") ? Number(params.get("offset")) : 0,
   };

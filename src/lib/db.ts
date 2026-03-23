@@ -15,8 +15,31 @@ export function getDb(): Database.Database {
 
     const schema = fs.readFileSync(SCHEMA_PATH, "utf-8");
     _db.exec(schema);
+
+    // One-time migration: normalize captured_at to ISO date format (YYYY-MM-DD)
+    migrateCapturedAtDates(_db);
   }
   return _db;
+}
+
+function migrateCapturedAtDates(db: Database.Database) {
+  const rows = db.prepare(
+    "SELECT id, captured_at FROM excerpts WHERE captured_at IS NOT NULL AND captured_at NOT LIKE '____-__-__%'"
+  ).all() as { id: number; captured_at: string }[];
+
+  if (rows.length === 0) return;
+
+  const update = db.prepare("UPDATE excerpts SET captured_at = @captured_at WHERE id = @id");
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      const d = new Date(row.captured_at);
+      if (!isNaN(d.getTime())) {
+        const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        update.run({ id: row.id, captured_at: iso });
+      }
+    }
+  });
+  tx();
 }
 
 export interface ExcerptRow {
@@ -45,17 +68,17 @@ export function upsertExcerpt(data: Omit<ExcerptRow, "id" | "created_at" | "upda
     VALUES (@file_path, @title, @source_type, @source_name, @author, @url, @published_at, @captured_at, @topic, @signal, @status, @tags, @location)
     ON CONFLICT(file_path) DO UPDATE SET
       title = @title,
-      source_type = @source_type,
+      source_type = COALESCE(excerpts.source_type, @source_type),
       source_name = @source_name,
       author = @author,
       url = @url,
       published_at = @published_at,
       captured_at = @captured_at,
       topic = @topic,
-      signal = @signal,
-      status = @status,
-      tags = @tags,
-      location = @location,
+      signal = CASE WHEN excerpts.signal > 0 THEN excerpts.signal ELSE @signal END,
+      status = CASE WHEN excerpts.status IN ('deep_read', 'archived') THEN excerpts.status ELSE @status END,
+      tags = CASE WHEN excerpts.tags != '[]' THEN excerpts.tags ELSE @tags END,
+      location = CASE WHEN excerpts.location = 'archived' THEN excerpts.location ELSE @location END,
       updated_at = datetime('now')
   `);
   return stmt.run(data);
@@ -71,6 +94,7 @@ export function getExcerpts(filters: {
   captured_after?: string;
   sort?: string;
   exclude_archived?: boolean;
+  exclude_deep_read?: boolean;
   limit?: number;
   offset?: number;
 }): { items: ExcerptRow[]; total: number } {
@@ -80,6 +104,9 @@ export function getExcerpts(filters: {
 
   if (filters.exclude_archived) {
     conditions.push("location != 'archived'");
+  }
+  if (filters.exclude_deep_read) {
+    conditions.push("status != 'deep_read'");
   }
   if (filters.status) {
     conditions.push("status = @status");
@@ -106,7 +133,7 @@ export function getExcerpts(filters: {
     params.search = `%${filters.search}%`;
   }
   if (filters.captured_after) {
-    conditions.push("captured_at >= @captured_after");
+    conditions.push("COALESCE(captured_at, date(created_at)) >= @captured_after");
     params.captured_after = filters.captured_after;
   }
 
@@ -114,7 +141,7 @@ export function getExcerpts(filters: {
   const limit = filters.limit ?? 50;
   const offset = filters.offset ?? 0;
 
-  const orderBy = filters.sort === "random" ? "ORDER BY RANDOM()" : "ORDER BY captured_at DESC, id DESC";
+  const orderBy = filters.sort === "random" ? "ORDER BY RANDOM()" : "ORDER BY COALESCE(captured_at, date(created_at)) DESC, id DESC";
 
   const total = db.prepare(`SELECT COUNT(*) as count FROM excerpts ${where}`).get(params) as { count: number };
   const items = db.prepare(`SELECT * FROM excerpts ${where} ${orderBy} LIMIT @limit OFFSET @offset`).all({ ...params, limit, offset }) as ExcerptRow[];
@@ -497,10 +524,36 @@ export function getTagFeedbackAnalysis(): {
   };
 }
 
-export function getStats(): { total: number; to_process: number; reading: number; read: number; archived: number } {
+export function getDeepReadExcerpts(filters: {
+  search?: string;
+  limit?: number;
+  offset?: number;
+}): { items: ExcerptRow[]; total: number } {
+  const db = getDb();
+  const conditions: string[] = ["status = 'deep_read'", "location != 'archived'"];
+  const params: Record<string, unknown> = {};
+
+  if (filters.search) {
+    conditions.push("(title LIKE @search OR topic LIKE @search)");
+    params.search = `%${filters.search}%`;
+  }
+
+  const where = `WHERE ${conditions.join(" AND ")}`;
+  const limit = filters.limit ?? 200;
+  const offset = filters.offset ?? 0;
+
+  const total = db.prepare(`SELECT COUNT(*) as count FROM excerpts ${where}`).get(params) as { count: number };
+  const items = db.prepare(
+    `SELECT * FROM excerpts ${where} ORDER BY updated_at DESC, id DESC LIMIT @limit OFFSET @offset`
+  ).all({ ...params, limit, offset }) as ExcerptRow[];
+
+  return { items, total: total.count };
+}
+
+export function getStats(): { total: number; to_process: number; reading: number; read: number; archived: number; deep_read: number } {
   const db = getDb();
   const rows = db.prepare("SELECT status, COUNT(*) as count FROM excerpts GROUP BY status").all() as { status: string; count: number }[];
-  const stats = { total: 0, to_process: 0, reading: 0, read: 0, archived: 0 };
+  const stats = { total: 0, to_process: 0, reading: 0, read: 0, archived: 0, deep_read: 0 };
   for (const row of rows) {
     stats.total += row.count;
     if (row.status in stats) {

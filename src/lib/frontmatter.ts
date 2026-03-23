@@ -72,9 +72,18 @@ export function normalizeFrontmatter(data: FrontmatterData, filePath: string): {
   // Normalize source_name
   const source_name = data.source_name ?? data.source ?? null;
 
-  // Normalize dates
+  // Normalize dates — ensure ISO format (YYYY-MM-DD)
   const published_at = data.published_at ?? data.published ?? null;
-  const captured_at = data.captured ?? null;
+  const rawCaptured = data.captured ?? null;
+  let captured_at: string | null = null;
+  if (rawCaptured) {
+    const d = new Date(String(rawCaptured));
+    if (!isNaN(d.getTime())) {
+      captured_at = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    } else {
+      captured_at = String(rawCaptured);
+    }
+  }
 
   // Normalize signal
   let signal = 0;
