@@ -1,0 +1,19 @@
+# OpenAI Codex project configuration
+# See: https://docs.openai.com/codex/configuration
+
+# Uncomment and set your preferred model:
+# model = "o4-mini"
+
+# Uncomment and set approval policy:
+# "suggest" = suggest changes, ask before applying
+# "auto-edit" = apply file edits automatically, ask before running commands
+# "full-auto" = apply all changes automatically
+# approval_policy = "suggest"
+
+# Uncomment and set sandbox mode:
+# "full" = full sandbox isolation
+# "permissive" = allow network access
+# sandbox_mode = "full"
+
+# Project documentation size limit (bytes)
+# project_doc_max_bytes = 200000
