@@ -5,7 +5,7 @@ import useSWR from "swr";
 import ExcerptList from "@/components/ExcerptList";
 import ReadingPanel from "@/components/ReadingPanel";
 import FilterBar from "@/components/FilterBar";
-import ViewTabs from "@/components/ViewTabs";
+import ViewTabs, { type ViewKey } from "@/components/ViewTabs";
 import ArchiveFilterBar from "@/components/ArchiveFilterBar";
 import ArchiveGroupList from "@/components/ArchiveGroupList";
 import StatsView from "@/components/StatsView";
@@ -28,6 +28,7 @@ interface Stats {
   reading: number;
   read: number;
   archived: number;
+  deep_read: number;
 }
 
 interface TagStat {
@@ -42,8 +43,23 @@ export interface TranslationState {
   text?: string;
 }
 
+const VALID_VIEWS: ViewKey[] = ["inbox", "deep-read", "archive", "stats", "tag-feedback"];
+
 export default function Home() {
-  const [activeView, setActiveView] = useState<"inbox" | "archive" | "stats" | "tag-feedback">("inbox");
+  const [activeView, setActiveViewRaw] = useState<ViewKey>("inbox");
+
+  // Restore last active tab from localStorage after mount
+  useEffect(() => {
+    const saved = localStorage.getItem("activeView");
+    if (saved && VALID_VIEWS.includes(saved as ViewKey)) {
+      setActiveViewRaw(saved as ViewKey);
+    }
+  }, []);
+
+  function setActiveView(view: ViewKey) {
+    setActiveViewRaw(view);
+    localStorage.setItem("activeView", view);
+  }
 
   // === Translation state (shared across excerpts) ===
   const [translations, setTranslations] = useState<Map<number, TranslationState>>(new Map());
@@ -104,6 +120,12 @@ export default function Home() {
   const [archiveSearch, setArchiveSearch] = useState("");
   const [archiveSelectedId, setArchiveSelectedId] = useState<number | null>(null);
   const [archiveLoading, setArchiveLoading] = useState(false);
+
+  // === Deep read state ===
+  const [deepReadItems, setDeepReadItems] = useState<ExcerptItem[]>([]);
+  const [deepReadTotal, setDeepReadTotal] = useState(0);
+  const [deepReadSelectedId, setDeepReadSelectedId] = useState<number | null>(null);
+  const [deepReadLoading, setDeepReadLoading] = useState(false);
 
   // Tag suggestions from vocabulary
   const { data: tagData } = useSWR("/api/tags", fetcher);
@@ -191,6 +213,24 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archiveSelectedTags, archiveSearch, activeView, initialized]);
 
+  // === Deep read: Load data ===
+  const loadDeepRead = useCallback(async () => {
+    setDeepReadLoading(true);
+    try {
+      const data = await fetcher("/api/deep-read/excerpts?limit=200");
+      setDeepReadItems(data.items);
+      setDeepReadTotal(data.total);
+    } finally {
+      setDeepReadLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!initialized || activeView !== "deep-read") return;
+    loadDeepRead();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView, initialized]);
+
   // Navigate to next item (inbox)
   function handleNext() {
     if (!selectedId || items.length === 0) return;
@@ -230,11 +270,49 @@ export default function Home() {
     });
   }
 
-  // Keyboard: arrow up/down (works in both views)
+  // After deep-read, remove from inbox list
+  function handleDeepRead() {
+    setItems((prev) => prev.filter((i) => i.id !== selectedId));
+    setStats((prev) => {
+      if (!prev) return prev;
+      return { ...prev, deep_read: prev.deep_read + 1 };
+    });
+  }
+
+  // Deep read tab: navigate to next
+  function handleDeepReadNext() {
+    if (!deepReadSelectedId || deepReadItems.length === 0) return;
+    const idx = deepReadItems.findIndex((i) => i.id === deepReadSelectedId);
+    if (idx < deepReadItems.length - 1) {
+      setDeepReadSelectedId(deepReadItems[idx + 1].id);
+    }
+  }
+
+  // Deep read tab: after archive
+  function handleDeepReadArchived() {
+    setDeepReadItems((prev) => prev.filter((i) => i.id !== deepReadSelectedId));
+    setDeepReadTotal((prev) => prev - 1);
+    setStats((prev) => {
+      if (!prev) return prev;
+      return { ...prev, archived: prev.archived + 1, deep_read: Math.max(0, prev.deep_read - 1) };
+    });
+  }
+
+  // Deep read tab: after delete
+  function handleDeepReadDeleted() {
+    setDeepReadItems((prev) => prev.filter((i) => i.id !== deepReadSelectedId));
+    setDeepReadTotal((prev) => prev - 1);
+    setStats((prev) => {
+      if (!prev) return prev;
+      return { ...prev, total: prev.total - 1, deep_read: Math.max(0, prev.deep_read - 1) };
+    });
+  }
+
+  // Keyboard: arrow up/down (works in all list views)
   useEffect(() => {
-    const currentItems = activeView === "inbox" ? items : archiveItems;
-    const currentSelectedId = activeView === "inbox" ? selectedId : archiveSelectedId;
-    const setCurrentSelectedId = activeView === "inbox" ? setSelectedId : setArchiveSelectedId;
+    const currentItems = activeView === "inbox" ? items : activeView === "deep-read" ? deepReadItems : archiveItems;
+    const currentSelectedId = activeView === "inbox" ? selectedId : activeView === "deep-read" ? deepReadSelectedId : archiveSelectedId;
+    const setCurrentSelectedId = activeView === "inbox" ? setSelectedId : activeView === "deep-read" ? setDeepReadSelectedId : setArchiveSelectedId;
 
     function handleKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
@@ -259,7 +337,7 @@ export default function Home() {
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [items, selectedId, archiveItems, archiveSelectedId, activeView]);
+  }, [items, selectedId, deepReadItems, deepReadSelectedId, archiveItems, archiveSelectedId, activeView]);
 
   const hasMore = filters.sort !== "random" && items.length < total;
 
@@ -276,7 +354,7 @@ export default function Home() {
 
   return (
     <div className="h-screen flex flex-col">
-      <ViewTabs activeView={activeView} onChange={setActiveView} />
+      <ViewTabs activeView={activeView} onChange={setActiveView} deepReadCount={stats?.deep_read} />
 
       {activeView === "inbox" ? (
         <>
@@ -300,7 +378,47 @@ export default function Home() {
                 onArchived={handleArchived}
                 onDeleted={handleDeleted}
                 onNext={handleNext}
+                onDeepRead={handleDeepRead}
                 translationState={selectedId ? translations.get(selectedId) : undefined}
+                onTranslate={startTranslation}
+              />
+            </div>
+          </div>
+        </>
+      ) : activeView === "deep-read" ? (
+        <>
+          <div className="flex items-center gap-3 px-4 py-2.5 border-b border-[var(--border)] bg-[var(--bg-secondary)]">
+            <span className="text-sm text-[var(--text-secondary)]">
+              {deepReadTotal} 篇待精读
+            </span>
+          </div>
+          <div className="flex-1 flex overflow-hidden">
+            <div className="w-80 flex-shrink-0 border-r border-[var(--border)] bg-[var(--bg)]">
+              {deepReadLoading ? (
+                <div className="h-full flex items-center justify-center text-[var(--text-secondary)] text-sm">
+                  加载中...
+                </div>
+              ) : (
+                <ExcerptList
+                  items={deepReadItems}
+                  selectedId={deepReadSelectedId}
+                  onSelect={setDeepReadSelectedId}
+                  onLoadMore={() => {}}
+                  hasMore={false}
+                  loading={false}
+                  translations={translations}
+                />
+              )}
+            </div>
+            <div className="flex-1 bg-[var(--bg)]">
+              <ReadingPanel
+                excerptId={deepReadSelectedId}
+                tagSuggestions={tagSuggestions}
+                deepReadMode
+                onArchived={handleDeepReadArchived}
+                onDeleted={handleDeepReadDeleted}
+                onNext={handleDeepReadNext}
+                translationState={deepReadSelectedId ? translations.get(deepReadSelectedId) : undefined}
                 onTranslate={startTranslation}
               />
             </div>

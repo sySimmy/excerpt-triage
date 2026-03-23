@@ -18,6 +18,7 @@ interface Stats {
   reading: number;
   read: number;
   archived: number;
+  deep_read: number;
 }
 
 interface FilterBarProps {

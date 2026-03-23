@@ -29,7 +29,9 @@ interface ReadingPanelProps {
   onArchived?: () => void;
   onDeleted?: () => void;
   onNext?: () => void;
+  onDeepRead?: () => void;
   archiveMode?: boolean;
+  deepReadMode?: boolean;
   translationState?: TranslationState;
   onTranslate?: (id: number, content: string) => void;
 }
@@ -43,7 +45,7 @@ const SOURCE_OPTIONS = [
   { value: "report", label: "Report" },
 ];
 
-export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, onDeleted, onNext, archiveMode, translationState, onTranslate }: ReadingPanelProps) {
+export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, onDeleted, onNext, onDeepRead, archiveMode, deepReadMode, translationState, onTranslate }: ReadingPanelProps) {
   const [excerpt, setExcerpt] = useState<ExcerptDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
@@ -234,6 +236,20 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
     }
   }
 
+  // Deep read
+  async function handleDeepRead() {
+    if (!excerptId) return;
+    const res = await fetch("/api/deep-read", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: excerptId }),
+    });
+    if (res.ok) {
+      onDeepRead?.();
+      onNext?.();
+    }
+  }
+
   // Delete
   async function handleDelete() {
     if (!excerptId || deleting) return;
@@ -273,9 +289,35 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
         }
         return;
       }
+      if (deepReadMode) {
+        // In deep-read mode: archive, delete, skip, rate, tags, translate
+        if (e.key === "Enter" && excerptId) {
+          e.preventDefault();
+          handleArchive();
+        } else if (e.key === "d" || e.key === "D") {
+          e.preventDefault();
+          handleDelete();
+        } else if (e.key === "s" || e.key === "S") {
+          e.preventDefault();
+          onNext?.();
+        } else if (e.key >= "1" && e.key <= "5") {
+          setSignal(Number(e.key));
+        } else if (e.key === "t" || e.key === "T") {
+          e.preventDefault();
+          handleSuggestTags();
+        } else if (e.key === "f" || e.key === "F") {
+          e.preventDefault();
+          handleTranslate();
+        }
+        return;
+      }
+      // Inbox mode
       if (e.key === "Enter" && excerptId && excerpt?.location !== "archived") {
         e.preventDefault();
         handleArchive();
+      } else if (e.key === "r" || e.key === "R") {
+        e.preventDefault();
+        handleDeepRead();
       } else if (e.key === "d" || e.key === "D") {
         e.preventDefault();
         handleDelete();
@@ -437,7 +479,9 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
           <span className="text-xs text-[var(--text-secondary)]">
             {archiveMode
               ? "1-5 评分 · T AI标签 · F 翻译 · E 编辑标签"
-              : "S 跳过 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译"}
+              : deepReadMode
+              ? "S 跳过 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译"
+              : "S 跳过 · R 精读 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译"}
           </span>
 
           {!archiveMode && (
@@ -456,6 +500,15 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
               >
                 跳过
               </button>
+
+              {!deepReadMode && !isArchived && (
+                <button
+                  onClick={handleDeepRead}
+                  className="px-3 py-1.5 text-sm bg-indigo-600/20 border border-indigo-500/30 text-indigo-300 rounded hover:bg-indigo-600/30 transition-colors"
+                >
+                  精读
+                </button>
+              )}
 
               {!isArchived && (
                 <button

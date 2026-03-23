@@ -27,6 +27,7 @@ const STATUS_COLORS: Record<string, string> = {
   to_process: "bg-gray-500",
   reading: "bg-blue-500",
   read: "bg-yellow-500",
+  deep_read: "bg-indigo-500",
   archived: "bg-green-500",
 };
 
