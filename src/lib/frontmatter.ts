@@ -102,6 +102,7 @@ export function normalizeFrontmatter(data: FrontmatterData, filePath: string): {
     "在读": "reading",
     "已读": "read",
     "已读待沉淀": "read",
+    "精读": "deep_read",
     "已归档": "archived",
   };
   const rawStatus = data.status ?? "to_process";

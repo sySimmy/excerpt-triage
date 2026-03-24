@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getExcerptById, updateExcerpt, logActivity } from "@/lib/db";
+import { updateFrontmatterFields } from "@/lib/frontmatter";
+import fs from "fs";
 
 export async function POST(request: NextRequest) {
   const { id } = await request.json();
@@ -10,6 +12,11 @@ export async function POST(request: NextRequest) {
   }
   if (excerpt.location === "archived") {
     return NextResponse.json({ error: "Already archived" }, { status: 400 });
+  }
+
+  // Write status to frontmatter so it syncs across machines via iCloud
+  if (fs.existsSync(excerpt.file_path)) {
+    updateFrontmatterFields(excerpt.file_path, { status: "精读" });
   }
 
   updateExcerpt(id, { status: "deep_read" });

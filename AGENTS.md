@@ -93,6 +93,7 @@ Root config files:
 - Keep API routes in `src/app/api/` following Next.js conventions
 - Use Tailwind CSS classes for styling
 - Run `npx tsc --noEmit` before finishing to verify types
+- Place side-effect writes (activity_log, tag_feedback) after the primary operation succeeds, never before — failed operations must not leave stale log entries
 
 ### Ask first
 - Install new npm dependencies

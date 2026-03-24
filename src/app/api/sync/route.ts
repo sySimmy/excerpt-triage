@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { fullScan } from "@/lib/scanner";
-
-const VAULT_PATH = process.env.VAULT_PATH!;
+import { VAULT_PATH } from "@/lib/env";
 
 export async function POST() {
   const result = fullScan(VAULT_PATH);

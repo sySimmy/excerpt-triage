@@ -41,6 +41,7 @@
 - Workflow: Raw-Excerpts → triage (tag, rate, translate) → Archive
 - AI features: MiniMax API for tag suggestions and translation
 - Data: SQLite DB caches file metadata; vault .md files are source of truth
+- API route pattern: validate → execute primary operation → check success → write side effects (logging, feedback). Never log before the operation succeeds
 
 ## Environment
 

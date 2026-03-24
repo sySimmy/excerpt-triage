@@ -2,7 +2,9 @@ import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
 
-const DB_PATH = path.join(process.cwd(), "excerpt-triage.db");
+const DB_DIR = path.join(process.cwd(), ".nosync");
+if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR);
+const DB_PATH = path.join(DB_DIR, "excerpt-triage.db");
 const SCHEMA_PATH = path.join(process.cwd(), "db", "schema.sql");
 
 let _db: Database.Database | null = null;
