@@ -33,20 +33,21 @@
 - `src/app/` — Pages and layouts (App Router)
 - `src/app/api/` — API route handlers (archive, excerpts, stats, sync, tags, translate, etc.)
 - `src/components/` — React components (ExcerptList, ReadingPanel, TagEditor, StatsView, etc.)
-- `src/lib/` — Core logic (db, scanner, archiver, frontmatter, tag-vocab)
+- `src/lib/` — Core logic (db, scanner, archiver, frontmatter, tag-vocab, env)
 
 ## Architecture
 
 - Obsidian vault integration: reads/writes .md files with YAML frontmatter
 - Workflow: Raw-Excerpts → triage (tag, rate, translate) → Archive
-- AI features: MiniMax API for tag suggestions and translation
+- AI features: MiniMax API for tag suggestions, translation, and content formatting
 - Data: SQLite DB caches file metadata; vault .md files are source of truth
 - API route pattern: validate → execute primary operation → check success → write side effects (logging, feedback). Never log before the operation succeeds
 
 ## Environment
 
-- `.env.local` contains `VAULT_PATH`, `MINIMAX_API_KEY`, `MINIMAX_MODEL`
-- SQLite DB files (`*.db`, `*.db-shm`, `*.db-wal`) are gitignored
+- `.env.local` contains `VAULT_PATH` (supports `~`), `MINIMAX_API_KEY`, `MINIMAX_MODEL`
+- SQLite DB lives in `.nosync/` (excluded from iCloud sync), each machine maintains its own
+- Multi-machine: vault syncs via iCloud, project code via GitHub, DB rebuilt locally by scanner
 
 ## Security
 

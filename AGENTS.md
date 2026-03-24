@@ -34,6 +34,7 @@ src/
 │       ├── excerpts/       # CRUD for excerpts (list + by ID)
 │       ├── stats/          # Statistics and summary endpoints
 │       ├── suggest-tags/   # AI tag suggestions (MiniMax)
+│       ├── format/         # AI content formatting (noise removal + readability)
 │       ├── sync/           # Vault ↔ DB sync
 │       ├── tag-feedback/   # AI tag feedback tracking + analysis
 │       ├── tags/           # Tag management
@@ -51,6 +52,7 @@ src/
 │   └── ViewTabs.tsx        # Tab navigation between views
 └── lib/                    # Core business logic
     ├── db.ts               # SQLite database (better-sqlite3) — schema, queries
+    ├── env.ts              # Shared environment config (VAULT_PATH with ~ expansion)
     ├── scanner.ts          # Vault file scanner — reads .md files into DB
     ├── archiver.ts         # Archive workflow — moves files, updates frontmatter
     ├── frontmatter.ts      # YAML frontmatter parsing/serialization
@@ -61,7 +63,8 @@ Root config files:
 - `next.config.mjs` — Next.js config (externalizes better-sqlite3)
 - `postcss.config.mjs` — PostCSS with Tailwind CSS plugin
 - `tsconfig.json` — TypeScript strict mode, path aliases
-- `.env.local` — Environment variables (VAULT_PATH, MINIMAX_API_KEY, MINIMAX_MODEL)
+- `.env.local` — Environment variables (VAULT_PATH supports `~`, MINIMAX_API_KEY, MINIMAX_MODEL)
+- `.nosync/` — Local SQLite DB (excluded from iCloud sync)
 
 ## Code Style
 

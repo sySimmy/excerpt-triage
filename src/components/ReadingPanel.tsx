@@ -56,6 +56,9 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
   const [suggesting, setSuggesting] = useState(false);
   const [candidates, setCandidates] = useState<string[]>([]);
   const [showTranslation, setShowTranslation] = useState(false);
+  const [formatting, setFormatting] = useState(false);
+  const [formattedContent, setFormattedContent] = useState<string | null>(null);
+  const [showFormatted, setShowFormatted] = useState(false);
 
   // AI tag tracking state
   const [tagsBeforeAI, setTagsBeforeAI] = useState<string[]>([]);
@@ -95,6 +98,32 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
       return;
     }
     onTranslate?.(excerptId, excerpt.content);
+  }
+
+  // AI format
+  async function handleFormat() {
+    if (!excerptId || formatting) return;
+    if (formattedContent) {
+      setShowFormatted(!showFormatted);
+      return;
+    }
+    setFormatting(true);
+    try {
+      const res = await fetch("/api/format", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: excerptId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.content) {
+          setFormattedContent(data.content);
+          setShowFormatted(true);
+        }
+      }
+    } finally {
+      setFormatting(false);
+    }
   }
 
   // AI tag suggestion
@@ -147,6 +176,8 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
       setExcerpt(null);
       return;
     }
+    setFormattedContent(null);
+    setShowFormatted(false);
     setLoading(true);
     setShowTranslation(false);
     setCandidates([]);
@@ -286,11 +317,14 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
         } else if (e.key === "f" || e.key === "F") {
           e.preventDefault();
           handleTranslate();
+        } else if (e.key === "g" || e.key === "G") {
+          e.preventDefault();
+          handleFormat();
         }
         return;
       }
       if (deepReadMode) {
-        // In deep-read mode: archive, delete, skip, rate, tags, translate
+        // In deep-read mode: archive, delete, skip, rate, tags, translate, format
         if (e.key === "Enter" && excerptId) {
           e.preventDefault();
           handleArchive();
@@ -308,6 +342,9 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
         } else if (e.key === "f" || e.key === "F") {
           e.preventDefault();
           handleTranslate();
+        } else if (e.key === "g" || e.key === "G") {
+          e.preventDefault();
+          handleFormat();
         }
         return;
       }
@@ -332,6 +369,9 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
       } else if (e.key === "f" || e.key === "F") {
         e.preventDefault();
         handleTranslate();
+      } else if (e.key === "g" || e.key === "G") {
+        e.preventDefault();
+        handleFormat();
       }
     }
     window.addEventListener("keydown", handleKey);
@@ -384,19 +424,25 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-5 py-4">
-        {/* Translate bar - only show for English content */}
-        {isEnglishContent(excerpt.content) && (
-          <div className="flex items-center gap-2 mb-3 pb-3 border-b border-[var(--border)]">
-            <span className="text-xs text-[var(--text-secondary)]">检测到英文内容</span>
+        {/* Content toolbar */}
+        <div className="flex items-center gap-2 mb-3 pb-3 border-b border-[var(--border)]">
+          <button
+            onClick={handleFormat}
+            disabled={formatting}
+            className="px-2.5 py-1 text-xs bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 rounded hover:bg-cyan-500/30 transition-colors disabled:opacity-50"
+          >
+            {formatting ? "排版中..." : formattedContent ? (showFormatted ? "显示原文" : "显示排版") : "AI 排版"}
+          </button>
+          {isEnglishContent(excerpt.content) && (
             <button
               onClick={handleTranslate}
               disabled={translating}
               className="px-2.5 py-1 text-xs bg-orange-500/20 border border-orange-500/30 text-orange-300 rounded hover:bg-orange-500/30 transition-colors disabled:opacity-50"
             >
-              {translating ? "翻译中（长文分段翻译）..." : translation ? (showTranslation ? "显示原文" : "显示翻译") : translationState?.status === "error" ? "翻译失败，重试" : "翻译全文"}
+              {translating ? "翻译中..." : translation ? (showTranslation ? "显示原文" : "显示翻译") : translationState?.status === "error" ? "翻译失败，重试" : "翻译全文"}
             </button>
-          </div>
-        )}
+          )}
+        </div>
 
         <div className="markdown-content max-w-none">
           <ReactMarkdown
@@ -407,7 +453,7 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
               ),
             }}
           >
-            {showTranslation && translation ? translation : excerpt.content}
+            {showTranslation && translation ? translation : showFormatted && formattedContent ? formattedContent : excerpt.content}
           </ReactMarkdown>
         </div>
       </div>
@@ -478,10 +524,10 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
           {/* Actions */}
           <span className="text-xs text-[var(--text-secondary)]">
             {archiveMode
-              ? "1-5 评分 · T AI标签 · F 翻译 · E 编辑标签"
+              ? "1-5 评分 · T AI标签 · F 翻译 · G 排版"
               : deepReadMode
-              ? "S 跳过 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译"
-              : "S 跳过 · R 精读 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译"}
+              ? "S 跳过 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译 · G 排版"
+              : "S 跳过 · R 精读 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译 · G 排版"}
           </span>
 
           {!archiveMode && (
