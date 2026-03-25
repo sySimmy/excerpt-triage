@@ -64,3 +64,40 @@ export function getTagGroup(
 export function isVocabTag(tag: string): boolean {
   return ALL_TAGS.includes(tag);
 }
+
+export function inferTier(tag: string): "tier2_tools" | "tier3_topics" {
+  const group = getTagGroup(tag);
+  if (group === "tool") return "tier2_tools";
+  return "tier3_topics";
+}
+
+export interface EffectiveVocab {
+  tier1: string[];
+  tier2: string[];
+  tier3: string[];
+}
+
+export function computeEffectiveVocab(
+  dynamicChanges: { tag: string; tier: string; action: string }[]
+): EffectiveVocab {
+  const tier2 = new Set<string>(TIER2_TOOLS);
+  const tier3 = new Set<string>(TIER3_TOPICS);
+
+  for (const { tag, tier, action } of dynamicChanges) {
+    const targetSet = tier === "tier2_tools" ? tier2 : tier3;
+    if (action === "add") {
+      targetSet.add(tag);
+      // Dedup: remove from the other tier if present
+      const otherSet = tier === "tier2_tools" ? tier3 : tier2;
+      otherSet.delete(tag);
+    } else if (action === "remove") {
+      targetSet.delete(tag);
+    }
+  }
+
+  return {
+    tier1: Object.keys(TIER1_DOMAIN),
+    tier2: [...tier2],
+    tier3: [...tier3],
+  };
+}
