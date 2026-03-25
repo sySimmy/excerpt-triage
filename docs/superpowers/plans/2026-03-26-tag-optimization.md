@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS dynamic_vocab (
   cooldown_until TEXT,
   oscillation_count INTEGER DEFAULT 0,
   source_run_id INTEGER REFERENCES optimization_runs(id),
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE TABLE IF NOT EXISTS prompt_overrides (
@@ -295,7 +295,7 @@ export function computeOptimizationStats(): OptimizationStats {
     .prepare(
       "SELECT MIN(id) as startId, MAX(id) as endId, COUNT(*) as cnt FROM tag_feedback WHERE id > ?"
     )
-    .get(lastEndId) as { startId: number; endId: number; cnt: number };
+    .get(lastEndId) as { startId: number | null; endId: number | null; cnt: number };
 
   // Full history analysis (only AI-used sessions)
   const rows = db
@@ -710,7 +710,7 @@ export function applyOptimizationActions(
         cooldownDate.setDate(cooldownDate.getDate() + 60);
         db.prepare(`
           INSERT INTO dynamic_vocab (tag, tier, action, reason, cooldown_until, oscillation_count, source_run_id, created_at)
-          VALUES (?,?,?,?,?,?,?, datetime('now'))
+          VALUES (?,?,?,?,?,?,?, datetime('now', 'localtime'))
           ON CONFLICT(tag) DO UPDATE SET
             tier = excluded.tier, action = excluded.action, reason = excluded.reason,
             cooldown_until = excluded.cooldown_until, oscillation_count = excluded.oscillation_count,
@@ -884,7 +884,7 @@ ${topicsBlock}
 1. tags 数组只能包含词表中的标签
 2. tags 必须包含至少一个领域标签
 3. candidates 只在词表确实无法覆盖时才建议
-4. 不要重复已有标签${rules.length > 0 ? "\n" + rules.map((r) => `5. ${r.content}`).join("\n") : ""}`;
+4. 不要重复已有标签${rules.length > 0 ? "\n" + rules.map((r, i) => `${5 + i}. ${r.content}`).join("\n") : ""}`;
 
   if (fewShots.length > 0) {
     prompt += `\n\n## 正面示例（参考这些场景选择标签）\n${fewShots
@@ -1348,7 +1348,6 @@ The new file should look like:
 
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
-import { ALL_TAGS } from "@/lib/tag-vocab";
 import { buildSystemPrompt, getEffectiveVocab } from "@/lib/tag-optimization";
 
 const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
