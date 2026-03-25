@@ -277,22 +277,35 @@ function applyOptimizationActions(runId: number, actions: AIAction[]) {
         // 如果该标签之前被 demote 过，oscillation_count +1
         const existing = db.prepare('SELECT action, oscillation_count FROM dynamic_vocab WHERE tag = ?').get(action.target_tag);
         const oscCount = (existing?.action === 'remove') ? (existing.oscillation_count ?? 0) + 1 : 0;
-        db.prepare(
-          'INSERT OR REPLACE INTO dynamic_vocab (tag, tier, action, reason, cooldown_until, oscillation_count, source_run_id) VALUES (?,?,?,?,?,?,?)'
-        ).run(action.target_tag, 'tier3_topics', 'add', action.reason, null, oscCount, runId);
+        // 使用 ON CONFLICT 保留原始 id 和 created_at（created_at 用于恢复时序判断）
+        db.prepare(`
+          INSERT INTO dynamic_vocab (tag, tier, action, reason, cooldown_until, oscillation_count, source_run_id)
+          VALUES (?,?,?,?,?,?,?)
+          ON CONFLICT(tag) DO UPDATE SET
+            tier = excluded.tier, action = excluded.action, reason = excluded.reason,
+            cooldown_until = excluded.cooldown_until, oscillation_count = excluded.oscillation_count,
+            source_run_id = excluded.source_run_id
+        `).run(action.target_tag, 'tier3_topics', 'add', action.reason, null, oscCount, runId);
         break;
       }
 
       case 'demote_tag': {
         // 硬性检查：tier1 标签拒绝 demote
-        if (TIER1_DOMAIN.includes(action.target_tag)) break;
+        // 注意：TIER1_DOMAIN 是 Record<string, string>，用 in 操作符而非 .includes()
+        if (action.target_tag in TIER1_DOMAIN) break;
         const existing = db.prepare('SELECT action, oscillation_count FROM dynamic_vocab WHERE tag = ?').get(action.target_tag);
         const oscCount = (existing?.action === 'add') ? (existing.oscillation_count ?? 0) + 1 : 0;
         const cooldownDate = new Date();
         cooldownDate.setDate(cooldownDate.getDate() + 60);
-        db.prepare(
-          'INSERT OR REPLACE INTO dynamic_vocab (tag, tier, action, reason, cooldown_until, oscillation_count, source_run_id) VALUES (?,?,?,?,?,?,?)'
-        ).run(action.target_tag, inferTier(action.target_tag), 'remove', action.reason, cooldownDate.toISOString(), oscCount, runId);
+        // 使用 ON CONFLICT 保留原始 id；demote 时更新 created_at 为当前时间（作为新的 demotion 时间戳）
+        db.prepare(`
+          INSERT INTO dynamic_vocab (tag, tier, action, reason, cooldown_until, oscillation_count, source_run_id, created_at)
+          VALUES (?,?,?,?,?,?,?, datetime('now'))
+          ON CONFLICT(tag) DO UPDATE SET
+            tier = excluded.tier, action = excluded.action, reason = excluded.reason,
+            cooldown_until = excluded.cooldown_until, oscillation_count = excluded.oscillation_count,
+            source_run_id = excluded.source_run_id, created_at = excluded.created_at
+        `).run(action.target_tag, inferTier(action.target_tag), 'remove', action.reason, cooldownDate.toISOString(), oscCount, runId);
         break;
       }
 
@@ -414,8 +427,14 @@ function computeEffectiveVocab(): EffectiveVocab {
 
   for (const { tag, tier, action } of dynamicChanges) {
     const targetSet = tier === 'tier2_tools' ? tier2 : tier3;
-    if (action === 'add') targetSet.add(tag);
-    else if (action === 'remove') targetSet.delete(tag);
+    if (action === 'add') {
+      targetSet.add(tag);
+      // 去重：如果 add 到 tier3，确保不在 tier2 中重复（反之亦然）
+      const otherSet = tier === 'tier2_tools' ? tier3 : tier2;
+      otherSet.delete(tag);
+    } else if (action === 'remove') {
+      targetSet.delete(tag);
+    }
   }
 
   return {
@@ -500,9 +519,10 @@ function computeEffectiveVocab(): EffectiveVocab {
 6. 如果无提案，记录空运行并返回
 7. 调用 MiniMax API 发送 meta-prompt + 提案（`max_tokens: 1500`）
 8. 解析 AI 返回 JSON。若解析失败：记录原始响应到 `ai_response`，`actions_taken` 记为空数组，返回错误给前端
-9. 调用 `applyOptimizationActions()`
-10. 写入 `optimization_runs` 记录
-11. 返回本轮动作摘要
+9. **先写入 `optimization_runs` 记录**（`actions_taken` 暂为空数组），获得 `runId`（因为 `dynamic_vocab` 和 `prompt_overrides` 的 `source_run_id` 是外键引用）
+10. 调用 `applyOptimizationActions(runId, actions)`
+11. 更新 `optimization_runs` 的 `actions_taken` 为实际执行的动作
+12. 返回本轮动作摘要
 
 ### `/api/tag-optimization/status` 响应
 
@@ -546,7 +566,7 @@ Array<{
 
 | 边界 | 实现方式 |
 |------|----------|
-| tier1 标签不可变 | `applyOptimizationActions` 硬编码检查 + `dynamic_vocab` CHECK 约束不含 tier1 |
+| tier1 标签不可变 | `applyOptimizationActions` 中 `action.target_tag in TIER1_DOMAIN` 硬编码检查（主要防线）；`dynamic_vocab.tier` 的 CHECK 约束仅保证 tier 值为 tier2/tier3（不防止 tier1 tag name 被错误写入，但代码层检查已阻止） |
 | AI 可否决提案 | meta-prompt 明确允许 `approved: false`，只执行 approved 的动作 |
 | 振荡防护 | `cooldown_until` 60 天冷却 + `oscillation_count` ≥3 时停止自动处理 |
 | prompt 不会无限膨胀 | 每个 override_type 有条数上限，超限自动淘汰旧条目 |
