@@ -219,6 +219,7 @@ material-library/
 │   │       ├── materials/route.ts
 │   │       ├── materials/[id]/route.ts
 │   │       ├── upload/route.ts
+│   │       ├── images/route.ts
 │   │       ├── stats/route.ts
 │   │       ├── brands/route.ts
 │   │       └── tags/route.ts
