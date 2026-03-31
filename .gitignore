@@ -1,5 +1,7 @@
 node_modules/
+node_modules.nosync/
 .next/
+.next.nosync/
 *.db
 *.db-shm
 *.db-wal

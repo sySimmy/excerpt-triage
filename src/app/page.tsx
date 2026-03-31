@@ -471,6 +471,10 @@ export default function Home() {
                 archiveMode
                 translationState={archiveSelectedId ? translations.get(archiveSelectedId) : undefined}
                 onTranslate={startTranslation}
+                onUnarchived={() => {
+                  setArchiveSelectedId(null);
+                  loadArchive();
+                }}
               />
             </div>
           </div>

@@ -30,6 +30,7 @@ interface ReadingPanelProps {
   onDeleted?: () => void;
   onNext?: () => void;
   onDeepRead?: () => void;
+  onUnarchived?: () => void;
   archiveMode?: boolean;
   deepReadMode?: boolean;
   translationState?: TranslationState;
@@ -45,7 +46,7 @@ const SOURCE_OPTIONS = [
   { value: "report", label: "Report" },
 ];
 
-export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, onDeleted, onNext, onDeepRead, archiveMode, deepReadMode, translationState, onTranslate }: ReadingPanelProps) {
+export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, onDeleted, onNext, onDeepRead, onUnarchived, archiveMode, deepReadMode, translationState, onTranslate }: ReadingPanelProps) {
   const [excerpt, setExcerpt] = useState<ExcerptDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
@@ -267,6 +268,19 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
     }
   }
 
+  // Unarchive — move back to inbox
+  async function handleUnarchive() {
+    if (!excerptId) return;
+    const res = await fetch("/api/archive/unarchive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: excerptId }),
+    });
+    if (res.ok) {
+      onUnarchived?.();
+    }
+  }
+
   // Deep read
   async function handleDeepRead() {
     if (!excerptId) return;
@@ -308,7 +322,7 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
       if (archiveMode) {
-        // In archive mode, only allow rating and tag shortcuts
+        // In archive mode: rating, tag, translate, format, unarchive
         if (e.key >= "1" && e.key <= "5") {
           setSignal(Number(e.key));
         } else if (e.key === "t" || e.key === "T") {
@@ -320,6 +334,9 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
         } else if (e.key === "g" || e.key === "G") {
           e.preventDefault();
           handleFormat();
+        } else if (e.key === "u" || e.key === "U") {
+          e.preventDefault();
+          handleUnarchive();
         }
         return;
       }
@@ -524,11 +541,20 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
           {/* Actions */}
           <span className="text-xs text-[var(--text-secondary)]">
             {archiveMode
-              ? "1-5 评分 · T AI标签 · F 翻译 · G 排版"
+              ? "1-5 评分 · T AI标签 · F 翻译 · G 排版 · U 移回收件箱"
               : deepReadMode
               ? "S 跳过 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译 · G 排版"
               : "S 跳过 · R 精读 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译 · G 排版"}
           </span>
+
+          {archiveMode && (
+            <button
+              onClick={handleUnarchive}
+              className="px-3 py-1.5 text-sm bg-amber-600/20 border border-amber-500/30 text-amber-300 rounded hover:bg-amber-600/30 transition-colors"
+            >
+              移回收件箱
+            </button>
+          )}
 
           {!archiveMode && (
             <>

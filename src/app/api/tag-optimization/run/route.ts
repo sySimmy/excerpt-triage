@@ -10,10 +10,7 @@ import {
   type AIAction,
 } from "@/lib/tag-optimization";
 import { TIER1_DOMAIN } from "@/lib/tag-vocab";
-
-const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
-const MINIMAX_MODEL = process.env.MINIMAX_MODEL ?? "MiniMax-Text-01";
-const MINIMAX_URL = "https://api.minimax.chat/v1/text/chatcompletion_v2";
+import { isMinimaxConfigured, minimaxChat } from "@/lib/minimax";
 
 function buildMetaPrompt(
   stats: ReturnType<typeof computeOptimizationStats>,
@@ -87,7 +84,7 @@ ${JSON.stringify(proposals, null, 2)}
 }
 
 export async function POST() {
-  if (!MINIMAX_API_KEY) {
+  if (!isMinimaxConfigured()) {
     return NextResponse.json(
       { error: "MINIMAX_API_KEY not configured" },
       { status: 500 }
@@ -167,41 +164,18 @@ export async function POST() {
   // Call MiniMax for AI-assisted decision
   try {
     const metaPrompt = buildMetaPrompt(stats, proposals);
-    const res = await fetch(MINIMAX_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${MINIMAX_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: MINIMAX_MODEL,
-        messages: [
-          {
-            role: "system",
-            content:
-              "你是标签推荐系统的优化助手。按要求分析提案并返回JSON。",
-          },
-          { role: "user", content: metaPrompt },
-        ],
-        temperature: 0.3,
-        max_tokens: 1500,
-      }),
+    const reply = await minimaxChat({
+      messages: [
+        {
+          role: "system",
+          content:
+            "你是标签推荐系统的优化助手。按要求分析提案并返回JSON。",
+        },
+        { role: "user", content: metaPrompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 8000,
     });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      console.error("MiniMax optimization API error:", errText);
-      db.prepare(
-        "UPDATE optimization_runs SET ai_response = ? WHERE id = ?"
-      ).run(errText, runId);
-      return NextResponse.json(
-        { error: `MiniMax API error: ${res.status}`, runId },
-        { status: 502 }
-      );
-    }
-
-    const data = await res.json();
-    const reply = data.choices?.[0]?.message?.content ?? "";
 
     // Save raw response
     db.prepare(

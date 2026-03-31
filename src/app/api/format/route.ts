@@ -2,10 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import matter from "gray-matter";
 import { getExcerptById } from "@/lib/db";
-
-const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
-const MINIMAX_MODEL = process.env.MINIMAX_MODEL ?? "MiniMax-Text-01";
-const MINIMAX_URL = "https://api.minimax.chat/v1/text/chatcompletion_v2";
+import { isMinimaxConfigured, minimaxChat } from "@/lib/minimax";
 
 const NOISE_PROMPT = `你是一个网页噪音检测器。用户会给你一篇带行号的 Markdown 文档。
 
@@ -96,7 +93,7 @@ function cleanMarkdown(text: string, title: string | null): string {
 }
 
 export async function POST(request: NextRequest) {
-  if (!MINIMAX_API_KEY) {
+  if (!isMinimaxConfigured()) {
     return NextResponse.json({ error: "MINIMAX_API_KEY not configured" }, { status: 500 });
   }
 
@@ -125,31 +122,14 @@ export async function POST(request: NextRequest) {
     const numbered = lines.map((line, i) => `${i + 1}: ${line}`).join("\n");
     const truncated = numbered.length > 10000 ? numbered.slice(0, 10000) + "\n..." : numbered;
 
-    const res = await fetch(MINIMAX_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${MINIMAX_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: MINIMAX_MODEL,
-        messages: [
-          { role: "system", content: NOISE_PROMPT },
-          { role: "user", content: `请分析以下内容，标记噪音行号：\n\n${truncated}` },
-        ],
-        temperature: 0.1,
-        max_tokens: 1000,
-      }),
+    const reply = await minimaxChat({
+      messages: [
+        { role: "system", content: NOISE_PROMPT },
+        { role: "user", content: `请分析以下内容，标记噪音行号：\n\n${truncated}` },
+      ],
+      temperature: 0.1,
+      max_tokens: 4000,
     });
-
-    if (!res.ok) {
-      const err = await res.text();
-      console.error("MiniMax API error:", err);
-      return NextResponse.json({ error: `MiniMax API error: ${res.status}` }, { status: 502 });
-    }
-
-    const data = await res.json();
-    const reply = data.choices?.[0]?.message?.content ?? "";
 
     const jsonMatch = reply.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {

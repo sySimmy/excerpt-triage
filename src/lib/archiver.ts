@@ -139,6 +139,67 @@ export function archiveExcerpt(
   }
 }
 
+const RAW_EXCERPTS_DIR = "05 Library/0507 Raw-Excerpts";
+
+export function unarchiveExcerpt(
+  vaultPath: string,
+  excerptId: number
+): { success: boolean; newPath?: string; error?: string } {
+  const excerpt = getExcerptById(excerptId);
+  if (!excerpt) {
+    return { success: false, error: "Excerpt not found" };
+  }
+
+  if (excerpt.location !== "archived") {
+    return { success: false, error: "Excerpt is not archived" };
+  }
+
+  const oldPath = excerpt.file_path;
+  if (!fs.existsSync(oldPath)) {
+    return { success: false, error: `File not found: ${oldPath}` };
+  }
+
+  const inboxDir = path.join(vaultPath, RAW_EXCERPTS_DIR);
+  fs.mkdirSync(inboxDir, { recursive: true });
+
+  const fileName = path.basename(oldPath);
+  let newPath = path.join(inboxDir, fileName);
+
+  // Handle name collision
+  if (fs.existsSync(newPath)) {
+    const ext = path.extname(fileName);
+    const base = path.basename(fileName, ext);
+    let counter = 1;
+    while (fs.existsSync(newPath)) {
+      newPath = path.join(inboxDir, `${base}-${counter}${ext}`);
+      counter++;
+    }
+  }
+
+  try {
+    // Update frontmatter: reset status, remove archive fields
+    updateFrontmatterFields(oldPath, {
+      status: "to_process",
+      archive_topic: undefined,
+      finished: undefined,
+    });
+
+    // Move file back to inbox
+    fs.renameSync(oldPath, newPath);
+
+    // Update SQLite
+    updateExcerpt(excerptId, {
+      status: "to_process",
+      location: "inbox",
+      file_path: newPath,
+    });
+
+    return { success: true, newPath };
+  } catch (e) {
+    return { success: false, error: String(e) };
+  }
+}
+
 export function deleteExcerptFile(
   vaultPath: string,
   excerptId: number

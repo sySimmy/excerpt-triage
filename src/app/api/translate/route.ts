@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
-const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
-const MINIMAX_MODEL = process.env.MINIMAX_MODEL ?? "MiniMax-Text-01";
-const MINIMAX_URL = "https://api.minimax.chat/v1/text/chatcompletion_v2";
+import { isMinimaxConfigured, minimaxChat } from "@/lib/minimax";
 
 const CHUNK_SIZE = 5000; // chars per chunk
 const SYSTEM_PROMPT = `你是一个专业的英译中翻译。
@@ -56,34 +53,18 @@ function splitIntoChunks(text: string): string[] {
 }
 
 async function translateChunk(text: string): Promise<string> {
-  const res = await fetch(MINIMAX_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${MINIMAX_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: MINIMAX_MODEL,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: `请将以下英文内容翻译成中文：\n\n${text}` },
-      ],
-      temperature: 0.3,
-      max_tokens: 4000,
-    }),
+  return minimaxChat({
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: `请将以下英文内容翻译成中文：\n\n${text}` },
+    ],
+    temperature: 0.3,
+    max_tokens: 4000,
   });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`MiniMax API error ${res.status}: ${err}`);
-  }
-
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content ?? "";
 }
 
 export async function POST(request: NextRequest) {
-  if (!MINIMAX_API_KEY) {
+  if (!isMinimaxConfigured()) {
     return NextResponse.json({ error: "MINIMAX_API_KEY not configured" }, { status: 500 });
   }
 

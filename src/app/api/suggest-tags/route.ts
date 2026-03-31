@@ -1,16 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildSystemPrompt, getEffectiveVocab } from "@/lib/tag-optimization";
-
-const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
-const MINIMAX_MODEL = process.env.MINIMAX_MODEL ?? "MiniMax-Text-01";
-const MINIMAX_URL = "https://api.minimax.chat/v1/text/chatcompletion_v2";
+import { isMinimaxConfigured, minimaxChat } from "@/lib/minimax";
 
 function isValidCandidate(tag: string): boolean {
   return /^[a-z][a-z0-9-]{1,19}$/.test(tag);
 }
 
 export async function POST(request: NextRequest) {
-  if (!MINIMAX_API_KEY) {
+  if (!isMinimaxConfigured()) {
     return NextResponse.json({ error: "MINIMAX_API_KEY not configured" }, { status: 500 });
   }
 
@@ -44,31 +41,14 @@ ${title ?? "无标题"}
 ${truncatedContent}`;
 
   try {
-    const res = await fetch(MINIMAX_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${MINIMAX_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: MINIMAX_MODEL,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        temperature: 0.3,
-        max_tokens: 200,
-      }),
+    const reply = await minimaxChat({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 2000,
     });
-
-    if (!res.ok) {
-      const err = await res.text();
-      console.error("MiniMax API error:", err);
-      return NextResponse.json({ error: `MiniMax API error: ${res.status}` }, { status: 502 });
-    }
-
-    const data = await res.json();
-    const reply = data.choices?.[0]?.message?.content ?? "";
 
     // Try to parse as {tags, candidates} object first
     const objMatch = reply.match(/\{[\s\S]*\}/);
