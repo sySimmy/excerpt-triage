@@ -1,7 +1,5 @@
 "use client";
 
-import { ALL_TAGS } from "@/lib/tag-vocab";
-
 interface Filters {
   status: string;
   source_type: string;
@@ -25,9 +23,10 @@ interface FilterBarProps {
   filters: Filters;
   onChange: (filters: Filters) => void;
   stats: Stats | null;
+  tagOptions: Array<{ value: string; label: string; count?: number }>;
 }
 
-export default function FilterBar({ filters, onChange, stats }: FilterBarProps) {
+export default function FilterBar({ filters, onChange, stats, tagOptions }: FilterBarProps) {
   const processed = stats ? stats.archived + stats.read : 0;
   const total = stats?.total ?? 0;
   const isRandom = filters.sort === "random";
@@ -85,9 +84,9 @@ export default function FilterBar({ filters, onChange, stats }: FilterBarProps) 
         className="bg-[var(--bg-tertiary)] border border-[var(--border)] rounded px-2 py-1 text-sm text-[var(--text)]"
       >
         <option value="">全部标签</option>
-        {ALL_TAGS.map((tag) => (
-          <option key={tag} value={tag}>
-            {tag}
+        {tagOptions.map((tag) => (
+          <option key={tag.value} value={tag.value}>
+            {tag.count ? `${tag.label} (${tag.count})` : tag.label}
           </option>
         ))}
       </select>

@@ -10,6 +10,8 @@ import ArchiveFilterBar from "@/components/ArchiveFilterBar";
 import ArchiveGroupList from "@/components/ArchiveGroupList";
 import StatsView from "@/components/StatsView";
 import TagFeedbackView from "@/components/TagFeedbackView";
+import { buildTagFilterOptions, isStaleInboxResponse, shouldSkipInboxLoad } from "@/lib/inbox-filters";
+import { ALL_TAGS } from "@/lib/tag-vocab";
 
 interface ExcerptItem {
   id: number;
@@ -111,6 +113,8 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const offsetRef = useRef(0);
+  const inboxRequestIdRef = useRef(0);
+  const inboxLoadingRef = useRef(false);
 
   // === Archive state ===
   const [archiveItems, setArchiveItems] = useState<ExcerptItem[]>([]);
@@ -128,10 +132,9 @@ export default function Home() {
   const [deepReadLoading, setDeepReadLoading] = useState(false);
 
   // Tag suggestions from vocabulary
-  const { data: tagData } = useSWR("/api/tags", fetcher);
-  const dbTags = (tagData ?? []).map((t: { tag: string }) => t.tag);
-  const vocabTags = ["ai-coding", "agents", "pkm", "design", "business", "investing", "life", "claude-code", "openclaw", "obsidian", "cursor", "mcp", "workflow", "deployment", "automation", "content-creation", "go-global", "growth", "quant", "ip", "tutorial", "opinion", "tool", "research", "translation"];
-  const tagSuggestions = [...vocabTags, ...dbTags.filter((t: string) => !vocabTags.includes(t))];
+  const { data: tagData } = useSWR<{ tag: string; count: number }[]>("/api/tags", fetcher);
+  const tagFilterOptions = buildTagFilterOptions(ALL_TAGS, tagData ?? []);
+  const tagSuggestions = tagFilterOptions.map((option) => option.value);
 
   // Initial sync
   useEffect(() => {
@@ -143,7 +146,10 @@ export default function Home() {
   // === Inbox: Load excerpts ===
   const loadExcerpts = useCallback(
     async (reset = false) => {
-      if (loading) return;
+      if (shouldSkipInboxLoad({ loading: inboxLoadingRef.current, reset })) return;
+
+      const requestId = ++inboxRequestIdRef.current;
+      inboxLoadingRef.current = true;
       setLoading(true);
 
       const offset = reset ? 0 : offsetRef.current;
@@ -159,6 +165,8 @@ export default function Home() {
 
       try {
         const data = await fetcher(`/api/excerpts?${params}`);
+        if (isStaleInboxResponse({ requestId, latestRequestId: inboxRequestIdRef.current })) return;
+
         if (reset) {
           setItems(data.items);
         } else {
@@ -171,10 +179,13 @@ export default function Home() {
         setStats(data.stats);
         offsetRef.current = offset + data.items.length;
       } finally {
-        setLoading(false);
+        if (!isStaleInboxResponse({ requestId, latestRequestId: inboxRequestIdRef.current })) {
+          inboxLoadingRef.current = false;
+          setLoading(false);
+        }
       }
     },
-    [filters, loading]
+    [filters]
   );
 
   // Reload inbox on filter change or init
@@ -358,7 +369,7 @@ export default function Home() {
 
       {activeView === "inbox" ? (
         <>
-          <FilterBar filters={filters} onChange={setFilters} stats={stats} />
+          <FilterBar filters={filters} onChange={setFilters} stats={stats} tagOptions={tagFilterOptions} />
           <div className="flex-1 flex overflow-hidden">
             <div className="w-80 flex-shrink-0 border-r border-[var(--border)] bg-[var(--bg)]">
               <ExcerptList

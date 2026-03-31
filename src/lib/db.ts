@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
+import { expandSourceTypeFilter } from "@/lib/inbox-filters";
 
 const DB_DIR = path.join(process.cwd(), ".nosync");
 if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR);
@@ -115,8 +116,18 @@ export function getExcerpts(filters: {
     params.status = filters.status;
   }
   if (filters.source_type) {
-    conditions.push("source_type = @source_type");
-    params.source_type = filters.source_type;
+    const sourceTypes = expandSourceTypeFilter(filters.source_type);
+    if (sourceTypes.length === 1) {
+      conditions.push("source_type = @source_type");
+      params.source_type = sourceTypes[0];
+    } else {
+      const placeholders = sourceTypes.map((sourceType, index) => {
+        const key = `source_type_${index}`;
+        params[key] = sourceType;
+        return `@${key}`;
+      });
+      conditions.push(`source_type IN (${placeholders.join(", ")})`);
+    }
   }
   if (filters.signal_min !== undefined) {
     conditions.push("signal >= @signal_min");

@@ -8,3 +8,4 @@ node_modules/
 .DS_Store
 tsconfig.tsbuildinfo
 .gstack/
+learn-claude-code/
