@@ -31,6 +31,7 @@ interface Stats {
   read: number;
   archived: number;
   deep_read: number;
+  learning: number;
 }
 
 interface TagStat {
@@ -45,7 +46,7 @@ export interface TranslationState {
   text?: string;
 }
 
-const VALID_VIEWS: ViewKey[] = ["inbox", "deep-read", "archive", "stats", "tag-feedback"];
+const VALID_VIEWS: ViewKey[] = ["inbox", "deep-read", "learning", "archive", "stats", "tag-feedback"];
 
 export default function Home() {
   const [activeView, setActiveViewRaw] = useState<ViewKey>("inbox");
@@ -105,7 +106,7 @@ export default function Home() {
   }
 
   // === Inbox state ===
-  const [filters, setFilters] = useState({ status: "", source_type: "", search: "", tag: "", captured_within: "", sort: "recent", _randomSeed: 0 });
+  const [filters, setFilters] = useState({ status: "", source_type: "", search: "", tag: "", captured_within: "", date_from: "", date_to: "", date_field: "captured" as "captured" | "published", sort: "recent", _randomSeed: 0 });
   const [items, setItems] = useState<ExcerptItem[]>([]);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -158,7 +159,13 @@ export default function Home() {
       if (filters.source_type) params.set("source_type", filters.source_type);
       if (filters.search) params.set("search", filters.search);
       if (filters.tag) params.set("tag", filters.tag);
-      if (filters.captured_within) params.set("captured_within", filters.captured_within);
+      if (filters.captured_within === "custom") {
+        if (filters.date_from) params.set("date_from", filters.date_from);
+        if (filters.date_to) params.set("date_to", filters.date_to);
+        if (filters.date_field) params.set("date_field", filters.date_field);
+      } else if (filters.captured_within) {
+        params.set("captured_within", filters.captured_within);
+      }
       if (filters.sort && filters.sort !== "recent") params.set("sort", filters.sort);
       params.set("limit", "50");
       params.set("offset", String(offset));
@@ -365,7 +372,7 @@ export default function Home() {
 
   return (
     <div className="h-screen flex flex-col">
-      <ViewTabs activeView={activeView} onChange={setActiveView} deepReadCount={stats?.deep_read} />
+      <ViewTabs activeView={activeView} onChange={setActiveView} deepReadCount={stats?.deep_read} learningCount={stats?.learning} />
 
       {activeView === "inbox" ? (
         <>
