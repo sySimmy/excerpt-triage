@@ -10,6 +10,7 @@ import ArchiveFilterBar from "@/components/ArchiveFilterBar";
 import ArchiveGroupList from "@/components/ArchiveGroupList";
 import StatsView from "@/components/StatsView";
 import TagFeedbackView from "@/components/TagFeedbackView";
+import LearningDashboard from "@/components/LearningDashboard";
 import { buildTagFilterOptions, isStaleInboxResponse, shouldSkipInboxLoad } from "@/lib/inbox-filters";
 import { ALL_TAGS } from "@/lib/tag-vocab";
 
@@ -326,6 +327,22 @@ export default function Home() {
     });
   }
 
+  // Learning tab: finish session and return to deep-read
+  function handleLearningFinish(id: number) {
+    fetch("/api/learning/finish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    }).then((res) => {
+      if (res.ok) {
+        setActiveView("deep-read");
+        loadDeepRead().then(() => {
+          setDeepReadSelectedId(id);
+        });
+      }
+    });
+  }
+
   // Keyboard: arrow up/down (works in all list views)
   useEffect(() => {
     const currentItems = activeView === "inbox" ? items : activeView === "deep-read" ? deepReadItems : archiveItems;
@@ -438,10 +455,20 @@ export default function Home() {
                 onNext={handleDeepReadNext}
                 translationState={deepReadSelectedId ? translations.get(deepReadSelectedId) : undefined}
                 onTranslate={startTranslation}
+                onStartLearning={() => {
+                  setDeepReadItems((prev) => prev.filter((i) => i.id !== deepReadSelectedId));
+                  setDeepReadTotal((prev) => prev - 1);
+                  setStats((prev) => {
+                    if (!prev) return prev;
+                    return { ...prev, deep_read: Math.max(0, prev.deep_read - 1), learning: prev.learning + 1 };
+                  });
+                }}
               />
             </div>
           </div>
         </>
+      ) : activeView === "learning" ? (
+        <LearningDashboard onFinish={handleLearningFinish} />
       ) : activeView === "archive" ? (
         <>
           <ArchiveFilterBar

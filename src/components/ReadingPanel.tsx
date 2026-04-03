@@ -31,6 +31,7 @@ interface ReadingPanelProps {
   onNext?: () => void;
   onDeepRead?: () => void;
   onUnarchived?: () => void;
+  onStartLearning?: () => void;
   archiveMode?: boolean;
   deepReadMode?: boolean;
   translationState?: TranslationState;
@@ -46,7 +47,7 @@ const SOURCE_OPTIONS = [
   { value: "report", label: "Report" },
 ];
 
-export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, onDeleted, onNext, onDeepRead, onUnarchived, archiveMode, deepReadMode, translationState, onTranslate }: ReadingPanelProps) {
+export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, onDeleted, onNext, onDeepRead, onUnarchived, onStartLearning, archiveMode, deepReadMode, translationState, onTranslate }: ReadingPanelProps) {
   const [excerpt, setExcerpt] = useState<ExcerptDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
@@ -60,6 +61,11 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
   const [formatting, setFormatting] = useState(false);
   const [formattedContent, setFormattedContent] = useState<string | null>(null);
   const [showFormatted, setShowFormatted] = useState(false);
+  const [pushingToNblm, setPushingToNblm] = useState(false);
+  const [nblmResult, setNblmResult] = useState<"success" | "error" | null>(null);
+  const [showArchiveChoice, setShowArchiveChoice] = useState(false);
+  const [startingLearning, setStartingLearning] = useState(false);
+  const [hasLearningSession, setHasLearningSession] = useState(false);
 
   // AI tag tracking state
   const [tagsBeforeAI, setTagsBeforeAI] = useState<string[]>([]);
@@ -127,6 +133,54 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
     }
   }
 
+  // Push to NotebookLM
+  async function handlePushToNotebookLM() {
+    if (!excerptId || pushingToNblm) return;
+    setPushingToNblm(true);
+    setNblmResult(null);
+    try {
+      const res = await fetch("/api/notebooklm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: excerptId }),
+      });
+      if (res.ok) {
+        setNblmResult("success");
+        setTimeout(() => setNblmResult(null), 3000);
+      } else {
+        const data = await res.json();
+        console.error("NotebookLM push failed:", data.error);
+        setNblmResult("error");
+        setTimeout(() => setNblmResult(null), 5000);
+      }
+    } catch {
+      setNblmResult("error");
+      setTimeout(() => setNblmResult(null), 5000);
+    } finally {
+      setPushingToNblm(false);
+    }
+  }
+
+  // Start learning session
+  async function handleStartLearning() {
+    if (!excerptId || startingLearning) return;
+    setStartingLearning(true);
+    try {
+      const res = await fetch("/api/learning/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: excerptId }),
+      });
+      if (res.ok) {
+        setShowArchiveChoice(false);
+        onStartLearning?.();
+        onNext?.();
+      }
+    } finally {
+      setStartingLearning(false);
+    }
+  }
+
   // AI tag suggestion
   async function handleSuggestTags() {
     if (!excerpt || suggesting) return;
@@ -182,6 +236,9 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
     setLoading(true);
     setShowTranslation(false);
     setCandidates([]);
+    setNblmResult(null);
+    setShowArchiveChoice(false);
+    setHasLearningSession(false);
     // Reset AI tracking
     setTagsBeforeAI([]);
     setAiSuggestedTags([]);
@@ -201,6 +258,11 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
         setSourceType(data.source_type ?? "");
       })
       .finally(() => setLoading(false));
+    // Check if returning from learning (needs learning archive route)
+    fetch(`/api/learning/material?excerpt_id=${excerptId}&tool_type=summary`)
+      .then((r) => r.json())
+      .then((data) => setHasLearningSession(data.exists))
+      .catch(() => setHasLearningSession(false));
   }, [excerptId]);
 
   // Auto-save on tag/signal/sourceType change
@@ -254,7 +316,8 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
     try {
       // Save tag feedback before archiving
       await saveTagFeedback(tags);
-      const res = await fetch("/api/archive", {
+      const archiveUrl = hasLearningSession ? "/api/learning/archive" : "/api/archive";
+      const res = await fetch(archiveUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: excerptId, tags, signal, source_type: sourceType }),
@@ -362,6 +425,9 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
         } else if (e.key === "g" || e.key === "G") {
           e.preventDefault();
           handleFormat();
+        } else if (e.key === "n" || e.key === "N") {
+          e.preventDefault();
+          handlePushToNotebookLM();
         }
         return;
       }
@@ -468,6 +534,7 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
               a: ({ href, children, ...props }) => (
                 <a href={href} target="_blank" rel="noreferrer" {...props}>{children}</a>
               ),
+              img: ({ src, ...props }) => src ? <img src={src} {...props} /> : null,
             }}
           >
             {showTranslation && translation ? translation : showFormatted && formattedContent ? formattedContent : excerpt.content}
@@ -543,7 +610,7 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
             {archiveMode
               ? "1-5 评分 · T AI标签 · F 翻译 · G 排版 · U 移回收件箱"
               : deepReadMode
-              ? "S 跳过 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译 · G 排版"
+              ? "S 跳过 · Enter 归档 · D 删除 · N NotebookLM · 1-5 评分 · T AI标签 · F 翻译 · G 排版"
               : "S 跳过 · R 精读 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译 · G 排版"}
           </span>
 
@@ -573,6 +640,22 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
                 跳过
               </button>
 
+              {deepReadMode && (
+                <button
+                  onClick={handlePushToNotebookLM}
+                  disabled={pushingToNblm}
+                  className={`px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 ${
+                    nblmResult === "success"
+                      ? "bg-green-600/20 border border-green-500/30 text-green-300"
+                      : nblmResult === "error"
+                      ? "bg-red-600/20 border border-red-500/30 text-red-300"
+                      : "bg-teal-600/20 border border-teal-500/30 text-teal-300 hover:bg-teal-600/30"
+                  }`}
+                >
+                  {pushingToNblm ? "推送中..." : nblmResult === "success" ? "已推送" : nblmResult === "error" ? "推送失败" : "NotebookLM"}
+                </button>
+              )}
+
               {!deepReadMode && !isArchived && (
                 <button
                   onClick={handleDeepRead}
@@ -582,7 +665,35 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
                 </button>
               )}
 
-              {!isArchived && (
+              {!isArchived && deepReadMode && (
+                <div className="relative">
+                  <button
+                    onClick={() => setShowArchiveChoice(!showArchiveChoice)}
+                    disabled={archiving}
+                    className="px-4 py-1.5 text-sm bg-[var(--accent)] text-white rounded hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+                  >
+                    归档 →
+                  </button>
+                  {showArchiveChoice && (
+                    <div className="absolute bottom-full right-0 mb-2 w-48 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg shadow-lg overflow-hidden z-10">
+                      <button
+                        onClick={() => { setShowArchiveChoice(false); handleArchive(); }}
+                        className="w-full px-4 py-2.5 text-sm text-left hover:bg-[var(--bg-tertiary)] transition-colors"
+                      >
+                        直接归档
+                      </button>
+                      <button
+                        onClick={handleStartLearning}
+                        disabled={startingLearning}
+                        className="w-full px-4 py-2.5 text-sm text-left text-teal-300 hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-50"
+                      >
+                        {startingLearning ? "处理中..." : "进入内化"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!isArchived && !deepReadMode && (
                 <button
                   onClick={handleArchive}
                   disabled={archiving}
