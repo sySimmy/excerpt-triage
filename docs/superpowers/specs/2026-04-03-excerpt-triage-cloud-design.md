@@ -115,6 +115,28 @@ excerpt-triage-cloud/
 
 结构不变，类型调整同上。
 
+### `prompt_overrides` 表
+
+从 SQLite 迁移，结构不变。用于 `tag-optimization.ts` 的 `buildSystemPrompt()` 函数，存储 AI 标签建议的 prompt 覆盖配置。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | `BIGINT GENERATED ALWAYS AS IDENTITY` | 主键 |
+| `key` | `TEXT UNIQUE` | prompt 配置 key |
+| `value` | `TEXT` | prompt 内容 |
+| `created_at` | `TIMESTAMPTZ DEFAULT NOW()` | 创建时间 |
+| `updated_at` | `TIMESTAMPTZ DEFAULT NOW()` | 更新时间 |
+
+### `excerpts` 表补充说明
+
+**`content` 字段**：存储 frontmatter 剥离后的正文（纯 Markdown）。sync agent 解析 .md 文件时用 `gray-matter` 分离 frontmatter 和 content，仅存储 content 部分。
+
+**`translation` 字段**（新增 `TEXT`）：存储翻译结果。现有系统把译文追加到 .md 文件末尾，云端版本独立存储，避免污染原文。下行同步时 sync agent 将译文以 `\n---\n## 译文\n` 格式追加回 .md 文件。
+
+**`location` 字段统一**：统一使用 `raw` / `archived` 两个值。原项目 `archiver.ts` 中的 `inbox` 值统一为 `raw`。
+
+**`deleted_at` 字段**（新增 `TIMESTAMPTZ`）：软删除标记。云端删除操作设置此字段而非物理删除行，sync agent 检测到 `deleted_at` 非空时删除对应 vault 文件，然后物理删除数据库行。
+
 ## API Layer
 
 ### 迁移策略
@@ -123,27 +145,35 @@ excerpt-triage-cloud/
 
 ### 路由分类
 
-**直接迁移（改数据源）：**
+**直接迁移（改数据源，纯 DB 查询）：**
 - `GET /api/excerpts` — 查询 Supabase `excerpts` 表
-- `PATCH /api/excerpts/[id]` — 更新标签/评分/状态
 - `GET /api/archive/excerpts` — 查询 `location = 'archived'`
 - `GET /api/archive/tags` — 聚合归档标签
 - `GET /api/tags` — 查询所有标签
-- `GET /api/stats` — 统计查询
-- `GET/POST /api/deep-read` — 精读工作流
+- `GET /api/stats` — 统计查询（注意：SQLite 的 `julianday()` 需改为 PostgreSQL 的 `EXTRACT(EPOCH FROM ...)`、`DATE_TRUNC()` 等）
 - `POST /api/tag-feedback` — 保存反馈
 - `GET /api/tag-feedback/analysis` — 反馈分析
+- `GET /api/tag-optimization/status` — 优化状态查询
+- `GET /api/tag-optimization/vocab` — 词表查询
+- `GET /api/tag-optimization/history` — 优化历史
+- `POST /api/tag-optimization/run` — 触发优化
 
-**需要重构：**
+**需要重构（去除本地文件系统依赖）：**
+- `PATCH /api/excerpts/[id]` — 现有实现会写回 vault frontmatter 和追加翻译到文件。云端版本只更新 Supabase（tags/signal/status/translation），sync agent 负责写回 vault 文件
 - `POST /api/sync` — 改为查询 sync agent 同步状态（最后同步时间、待同步数量），不再直接扫描文件
 - `POST /api/archive` — 更新 Supabase 状态为 `archived`，不再直接移动文件；sync agent 负责实际文件移动
-- `DELETE /api/archive` — 标记删除状态，sync agent 处理文件
+- `DELETE /api/archive` — 设置 `deleted_at` 软删除标记，sync agent 检测后删除 vault 文件并物理删除 DB 行
 - `POST /api/archive/unarchive` — 更新状态回 `to_process`，sync agent 把文件移回
+- `GET/POST /api/deep-read` — POST 现有实现调用 `updateFrontmatterFields()` 写本地文件，云端版本只更新 Supabase status
+- `POST /api/format` — 现有实现用 `fs.readFileSync` 读本地文件内容，云端版本从 Supabase `content` 字段读取
 
 **不变：**
 - `POST /api/suggest-tags` — MiniMax API 调用
-- `POST /api/translate` — MiniMax API 调用
-- `POST /api/format` — 纯文本处理
+- `POST /api/translate` — MiniMax API 调用，但翻译结果存入 `excerpts.translation` 字段而非追加到文件
+
+**移除（不适用于云端）：**
+- `POST /api/notebooklm` — 依赖本地 Python 脚本 `scripts/push-to-notebooklm.py`，无法在 Vercel 运行。如需保留，后续可作为 sync agent 的本地命令实现
+- `POST /api/stats/summary` — 如依赖本地文件系统则移除，如纯 AI 调用则归入"不变"类
 
 ### 读取正文
 
@@ -186,7 +216,7 @@ Tailwind 响应式断点，一套代码：
 
 - `public/manifest.json`：应用名 "摘录分拣台"、图标、`display: standalone`、主题色 `#1a1a2e`
 - `layout.tsx` 添加 PWA meta tags（`theme-color`、`apple-mobile-web-app-capable`）
-- Service Worker：App Shell 缓存 + 网络优先策略（使用 `next-pwa` 或 `serwist`）
+- Service Worker：仅用于 PWA 安装和加速加载（缓存静态资源），不做离线数据缓存。无网络时显示"需要网络连接"提示页
 
 ## Local Sync Agent
 
@@ -217,10 +247,13 @@ Mac 上运行的 Node.js 脚本，双向同步 vault 和 Supabase。
 
 ### 冲突处理
 
-单用户，last-write-wins：
-- 上行：文件内容覆盖云端
-- 下行：云端状态覆盖本地 frontmatter
-- 以 `updated_at` 时间戳为准
+单用户场景，按字段职责分离，避免整行覆盖：
+
+- **上行（vault → cloud）**：sync agent 只更新 `content`、frontmatter 元数据（title/source_type/author 等）、`file_path`。不覆盖用户在云端操作产生的字段（tags/signal/status/location/translation）
+- **下行（cloud → vault）**：sync agent 只把 tags/signal/status/topic/translation 写回 vault frontmatter。不覆盖文件正文
+- **Upsert 防御逻辑**：复用原项目 `upsertExcerpt` 的 CASE 逻辑——不覆盖已有的 signal（> 0）、非空 tags、deep_read/archived 状态
+
+这样即使上行和下行同时发生，它们操作的字段不重叠，不会产生冲突。
 
 ### 代码复用
 
@@ -240,7 +273,7 @@ macOS `launchd` plist，Mac 开机后自动启动 watch 模式。
 ### Vercel
 
 - Next.js 15 原生支持
-- 环境变量：`SUPABASE_URL`、`SUPABASE_ANON_KEY`、`SUPABASE_SERVICE_KEY`、`MINIMAX_API_KEY`、`MINIMAX_MODEL`、`ACCESS_PASSWORD`
+- 环境变量：`SUPABASE_URL`、`SUPABASE_ANON_KEY`、`SUPABASE_SERVICE_KEY`、`MINIMAX_API_KEY`、`MINIMAX_MODEL`、`ACCESS_PASSWORD`、`NOTEBOOKLM_NOTEBOOK_ID`（可选，如保留该功能）
 - 移除 `better-sqlite3` 依赖（无需 native binding）
 - 移除 `VAULT_PATH`（云端不访问本地文件系统）
 
@@ -248,7 +281,11 @@ macOS `launchd` plist，Mac 开机后自动启动 watch 模式。
 
 - 免费版（500MB 数据库、50K 月活跃用户、1GB 文件存储）
 - 用 migration SQL 初始化表结构
-- 开启 Row Level Security
+- 开启 Row Level Security，策略：
+  - `anon` key（Vercel 使用）：所有表 SELECT/INSERT/UPDATE/DELETE（通过 middleware 密码验证控制访问）
+  - `service_role` key（sync agent 使用）：绕过 RLS 全权限
+  - RLS 策略实质上是 `USING (true)` + `WITH CHECK (true)`，因为访问控制在应用层（密码 cookie）而非数据库层
+- 容量预估：假设每条摘录 content 平均 5KB，1000 条约 5MB，500MB 限制足够日常使用
 
 ### Sync Agent
 
