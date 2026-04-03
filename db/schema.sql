@@ -96,3 +96,26 @@ CREATE TABLE IF NOT EXISTS prompt_overrides (
   source_run_id INTEGER REFERENCES optimization_runs(id),
   created_at TEXT DEFAULT (datetime('now'))
 );
+
+-- === Learning / Internalization ===
+
+CREATE TABLE IF NOT EXISTS learning_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  excerpt_id INTEGER NOT NULL UNIQUE,
+  notebooklm_source_id TEXT NOT NULL,
+  conversation_id TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_sessions_excerpt ON learning_sessions(excerpt_id);
+
+CREATE TABLE IF NOT EXISTS learning_materials (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  excerpt_id INTEGER NOT NULL,
+  tool_type TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(excerpt_id, tool_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_materials_excerpt ON learning_materials(excerpt_id);
