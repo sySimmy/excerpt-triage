@@ -117,15 +117,18 @@ excerpt-triage-cloud/
 
 ### `prompt_overrides` 表
 
-从 SQLite 迁移，结构不变。用于 `tag-optimization.ts` 的 `buildSystemPrompt()` 函数，存储 AI 标签建议的 prompt 覆盖配置。
+从 SQLite 迁移，结构对齐原始 schema。用于 `tag-optimization.ts` 的 `buildSystemPrompt()` 和 `applyOptimizationActions()`。
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `id` | `BIGINT GENERATED ALWAYS AS IDENTITY` | 主键 |
-| `key` | `TEXT UNIQUE` | prompt 配置 key |
-| `value` | `TEXT` | prompt 内容 |
+| `override_type` | `TEXT NOT NULL CHECK(...)` | 类型：few_shot / negative_example / rule_adjustment / tag_note |
+| `content` | `TEXT NOT NULL` | prompt 覆盖内容 |
+| `target_tag` | `TEXT` | 目标标签（可选） |
+| `priority` | `INTEGER DEFAULT 0` | 优先级 |
+| `active` | `BOOLEAN DEFAULT TRUE` | 是否启用（SQLite 的 INTEGER 0/1 → PostgreSQL BOOLEAN） |
+| `source_run_id` | `BIGINT REFERENCES optimization_runs(id)` | 关联的优化运行 |
 | `created_at` | `TIMESTAMPTZ DEFAULT NOW()` | 创建时间 |
-| `updated_at` | `TIMESTAMPTZ DEFAULT NOW()` | 更新时间 |
 
 ### `excerpts` 表补充说明
 
@@ -146,34 +149,67 @@ excerpt-triage-cloud/
 ### 路由分类
 
 **直接迁移（改数据源，纯 DB 查询）：**
-- `GET /api/excerpts` — 查询 Supabase `excerpts` 表
+- `GET /api/excerpts` — 查询 Supabase `excerpts` 表。注意：响应包含 `stats` 属性（各状态计数聚合），需保留
 - `GET /api/archive/excerpts` — 查询 `location = 'archived'`
 - `GET /api/archive/tags` — 聚合归档标签
 - `GET /api/tags` — 查询所有标签
-- `GET /api/stats` — 统计查询（注意：SQLite 的 `julianday()` 需改为 PostgreSQL 的 `EXTRACT(EPOCH FROM ...)`、`DATE_TRUNC()` 等）
+- `GET /api/stats` — 统计查询
+- `POST /api/stats/summary` — DB 查询 + MiniMax AI 调用，两者在云端均可用
 - `POST /api/tag-feedback` — 保存反馈
+- `GET /api/tag-feedback` — 查询反馈记录
 - `GET /api/tag-feedback/analysis` — 反馈分析
 - `GET /api/tag-optimization/status` — 优化状态查询
 - `GET /api/tag-optimization/vocab` — 词表查询
 - `GET /api/tag-optimization/history` — 优化历史
 - `POST /api/tag-optimization/run` — 触发优化
+- `GET /api/deep-read/excerpts` — 精读列表查询（含搜索/分页）
 
 **需要重构（去除本地文件系统依赖）：**
-- `PATCH /api/excerpts/[id]` — 现有实现会写回 vault frontmatter 和追加翻译到文件。云端版本只更新 Supabase（tags/signal/status/translation），sync agent 负责写回 vault 文件
+- `GET /api/excerpts/[id]` — 现有实现用 `fs.readFileSync` 读文件内容并剥离 frontmatter。云端版本从 `excerpts.content` 字段读取
+- `PATCH /api/excerpts/[id]` — 现有实现会写回 vault frontmatter 和追加翻译到文件。云端版本只更新 Supabase（tags/signal/status），翻译结果存入 `excerpts.translation` 字段。sync agent 负责写回 vault 文件
 - `POST /api/sync` — 改为查询 sync agent 同步状态（最后同步时间、待同步数量），不再直接扫描文件
-- `POST /api/archive` — 更新 Supabase 状态为 `archived`，不再直接移动文件；sync agent 负责实际文件移动
-- `DELETE /api/archive` — 设置 `deleted_at` 软删除标记，sync agent 检测后删除 vault 文件并物理删除 DB 行
-- `POST /api/archive/unarchive` — 更新状态回 `to_process`，sync agent 把文件移回
-- `GET/POST /api/deep-read` — POST 现有实现调用 `updateFrontmatterFields()` 写本地文件，云端版本只更新 Supabase status
-- `POST /api/format` — 现有实现用 `fs.readFileSync` 读本地文件内容，云端版本从 Supabase `content` 字段读取
+- `POST /api/archive` — 更新 Supabase 状态为 `archived`，不再直接移动文件；sync agent 负责实际文件移动。**必须保留 `activity_log` INSERT**
+- `DELETE /api/archive` — 设置 `deleted_at` 软删除标记，sync agent 检测后删除 vault 文件并物理删除 DB 行。**必须保留 `activity_log` INSERT**
+- `POST /api/archive/unarchive` — 更新状态回 `to_process`，sync agent 把文件移回。**必须保留 `activity_log` INSERT**
+- `POST /api/deep-read` — 现有实现调用 `updateFrontmatterFields()` 写本地文件。云端版本只更新 Supabase status。**必须保留 `activity_log` INSERT**
+- `POST /api/format` — 现有实现用 `fs.readFileSync` 读本地文件内容。云端版本从 Supabase `content` 字段读取
 
-**不变：**
+**不变（纯 AI 代理，不涉及 DB 或文件系统）：**
 - `POST /api/suggest-tags` — MiniMax API 调用
-- `POST /api/translate` — MiniMax API 调用，但翻译结果存入 `excerpts.translation` 字段而非追加到文件
+- `POST /api/translate` — MiniMax API 调用（纯代理，翻译结果的存储由 PATCH /api/excerpts/[id] 处理）
 
 **移除（不适用于云端）：**
 - `POST /api/notebooklm` — 依赖本地 Python 脚本 `scripts/push-to-notebooklm.py`，无法在 Vercel 运行。如需保留，后续可作为 sync agent 的本地命令实现
-- `POST /api/stats/summary` — 如依赖本地文件系统则移除，如纯 AI 调用则归入"不变"类
+
+### SQL 方言迁移要点
+
+SQLite → PostgreSQL 需要注意的查询改写：
+
+| SQLite | PostgreSQL | 使用场景 |
+|---|---|---|
+| `julianday()` | `EXTRACT(EPOCH FROM ...)` | stats 路由的日期计算 |
+| `date(created_at)` | `created_at::date` | 日期过滤/排序 |
+| `COALESCE(captured_at, date(created_at))` | `COALESCE(captured_at, created_at::date)` | 日期排序回退 |
+| `tags LIKE '%"tag"%'` | `tags @> '["tag"]'::jsonb` 或 `tags ? 'tag'` | JSONB 标签过滤 |
+| `datetime('now')` / `datetime('now','localtime')` | `NOW()` | 时间戳（统一为 UTC `TIMESTAMPTZ`） |
+| `RANDOM()` | `RANDOM()` | 随机排序（两者语法相同） |
+
+### `updated_at` 自动更新
+
+使用 PostgreSQL trigger 自动维护 `updated_at`：
+
+```sql
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
+$$ LANGUAGE plpgsql;
+
+-- 对 excerpts 表应用
+CREATE TRIGGER set_updated_at BEFORE UPDATE ON excerpts
+FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+```
+
+`synced_at` 默认为 `NULL`，sync agent 首次同步时设置。
 
 ### 读取正文
 
@@ -273,7 +309,7 @@ macOS `launchd` plist，Mac 开机后自动启动 watch 模式。
 ### Vercel
 
 - Next.js 15 原生支持
-- 环境变量：`SUPABASE_URL`、`SUPABASE_ANON_KEY`、`SUPABASE_SERVICE_KEY`、`MINIMAX_API_KEY`、`MINIMAX_MODEL`、`ACCESS_PASSWORD`、`NOTEBOOKLM_NOTEBOOK_ID`（可选，如保留该功能）
+- 环境变量：`SUPABASE_URL`、`SUPABASE_ANON_KEY`、`SUPABASE_SERVICE_KEY`、`MINIMAX_API_KEY`、`MINIMAX_MODEL`、`ACCESS_PASSWORD`
 - 移除 `better-sqlite3` 依赖（无需 native binding）
 - 移除 `VAULT_PATH`（云端不访问本地文件系统）
 
