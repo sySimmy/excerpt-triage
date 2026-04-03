@@ -425,9 +425,6 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
         } else if (e.key === "g" || e.key === "G") {
           e.preventDefault();
           handleFormat();
-        } else if (e.key === "n" || e.key === "N") {
-          e.preventDefault();
-          handlePushToNotebookLM();
         }
         return;
       }
@@ -610,7 +607,7 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
             {archiveMode
               ? "1-5 评分 · T AI标签 · F 翻译 · G 排版 · U 移回收件箱"
               : deepReadMode
-              ? "S 跳过 · Enter 归档 · D 删除 · N NotebookLM · 1-5 评分 · T AI标签 · F 翻译 · G 排版"
+              ? "S 跳过 · Enter 归档/内化 · D 删除 · 1-5 评分 · T AI标签 · F 翻译 · G 排版"
               : "S 跳过 · R 精读 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译 · G 排版"}
           </span>
 
