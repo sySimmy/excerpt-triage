@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import SummaryView from "./SummaryView";
 import QuizView from "./QuizView";
 import FlashcardView from "./FlashcardView";
@@ -20,18 +22,21 @@ export interface ExcerptInfo {
 }
 
 type ToolType = "summary" | "quiz" | "flashcard" | "audio" | "qa";
+type TabKey = ToolType | "original";
 
 interface TabInfo {
-  key: ToolType;
+  key: TabKey;
   label: string;
+  isTool: boolean;
 }
 
 const TABS: TabInfo[] = [
-  { key: "summary", label: "摘要" },
-  { key: "quiz", label: "测验" },
-  { key: "flashcard", label: "记忆卡" },
-  { key: "audio", label: "播客" },
-  { key: "qa", label: "问答" },
+  { key: "original", label: "原文", isTool: false },
+  { key: "summary", label: "摘要", isTool: true },
+  { key: "quiz", label: "测验", isTool: true },
+  { key: "flashcard", label: "记忆卡", isTool: true },
+  { key: "audio", label: "播客", isTool: true },
+  { key: "qa", label: "问答", isTool: true },
 ];
 
 interface MaterialCache {
@@ -56,12 +61,13 @@ interface LearningPanelProps {
 }
 
 export default function LearningPanel({ excerpt, onFinish }: LearningPanelProps) {
-  const [activeTab, setActiveTab] = useState<ToolType>("summary");
+  const [activeTab, setActiveTab] = useState<TabKey>("original");
   const [materials, setMaterials] = useState<MaterialCache>(EMPTY_CACHE);
   const [generated, setGenerated] = useState<Set<ToolType>>(new Set());
   const [generating, setGenerating] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [archiving, setArchiving] = useState(false);
+  const [originalContent, setOriginalContent] = useState<string>("");
 
   // Load all cached materials when excerpt changes
   useEffect(() => {
@@ -75,6 +81,14 @@ export default function LearningPanel({ excerpt, onFinish }: LearningPanelProps)
     setMaterials(EMPTY_CACHE);
     setGenerated(new Set());
     setAudioUrl(null);
+    setOriginalContent("");
+    setActiveTab("original");
+
+    // Load original content
+    fetch(`/api/excerpts/${excerpt.id}`)
+      .then((r) => r.json())
+      .then((data) => setOriginalContent(data.content ?? ""))
+      .catch(() => setOriginalContent(""));
 
     const toolTypes: ToolType[] = ["summary", "quiz", "flashcard", "audio", "qa"];
     const qaToolType = "qa_history"; // stored under different key
@@ -207,7 +221,7 @@ export default function LearningPanel({ excerpt, onFinish }: LearningPanelProps)
       {/* Tab bar */}
       <div className="flex border-b border-[var(--border)] bg-[var(--bg-secondary)]">
         {TABS.map((tab) => {
-          const isGenerated = generated.has(tab.key);
+          const isGenerated = tab.isTool && generated.has(tab.key as ToolType);
           return (
             <button
               key={tab.key}
@@ -232,6 +246,24 @@ export default function LearningPanel({ excerpt, onFinish }: LearningPanelProps)
 
       {/* Content area */}
       <div className="flex-1 overflow-hidden">
+        {activeTab === "original" && (
+          <div className="h-full overflow-y-auto px-5 py-4">
+            <div className="markdown-content max-w-none">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  a: ({ href, children, ...props }) => (
+                    <a href={href} target="_blank" rel="noreferrer" {...props}>{children}</a>
+                  ),
+                  img: ({ src, ...props }) => src ? <img src={src} {...props} /> : null,
+                }}
+              >
+                {originalContent}
+              </ReactMarkdown>
+            </div>
+          </div>
+        )}
+
         {activeTab === "summary" && (
           materials.summary ? (
             <SummaryView content={materials.summary} />

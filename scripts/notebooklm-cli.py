@@ -153,7 +153,7 @@ async def cmd_ask(client, args):
     kwargs = {}
     if args.conversation_id:
         kwargs["conversation_id"] = args.conversation_id
-    response = await client.notebooks.ask(args.notebook_id, args.question, **kwargs)
+    response = await client.chat.ask(args.notebook_id, args.question, **kwargs)
     # response may be object or dict
     def get(obj, *keys, default=None):
         for k in keys:

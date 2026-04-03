@@ -637,22 +637,6 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
                 跳过
               </button>
 
-              {deepReadMode && (
-                <button
-                  onClick={handlePushToNotebookLM}
-                  disabled={pushingToNblm}
-                  className={`px-3 py-1.5 text-sm rounded transition-colors disabled:opacity-50 ${
-                    nblmResult === "success"
-                      ? "bg-green-600/20 border border-green-500/30 text-green-300"
-                      : nblmResult === "error"
-                      ? "bg-red-600/20 border border-red-500/30 text-red-300"
-                      : "bg-teal-600/20 border border-teal-500/30 text-teal-300 hover:bg-teal-600/30"
-                  }`}
-                >
-                  {pushingToNblm ? "推送中..." : nblmResult === "success" ? "已推送" : nblmResult === "error" ? "推送失败" : "NotebookLM"}
-                </button>
-              )}
-
               {!deepReadMode && !isArchived && (
                 <button
                   onClick={handleDeepRead}
@@ -663,32 +647,22 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
               )}
 
               {!isArchived && deepReadMode && (
-                <div className="relative">
+                <>
                   <button
-                    onClick={() => setShowArchiveChoice(!showArchiveChoice)}
+                    onClick={handleStartLearning}
+                    disabled={startingLearning}
+                    className="px-3 py-1.5 text-sm bg-teal-600/20 border border-teal-500/30 text-teal-300 rounded hover:bg-teal-600/30 transition-colors disabled:opacity-50"
+                  >
+                    {startingLearning ? "处理中..." : "进入内化"}
+                  </button>
+                  <button
+                    onClick={handleArchive}
                     disabled={archiving}
                     className="px-4 py-1.5 text-sm bg-[var(--accent)] text-white rounded hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
                   >
-                    归档 →
+                    {archiving ? "归档中..." : "归档 →"}
                   </button>
-                  {showArchiveChoice && (
-                    <div className="absolute bottom-full right-0 mb-2 w-48 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg shadow-lg overflow-hidden z-10">
-                      <button
-                        onClick={() => { setShowArchiveChoice(false); handleArchive(); }}
-                        className="w-full px-4 py-2.5 text-sm text-left hover:bg-[var(--bg-tertiary)] transition-colors"
-                      >
-                        直接归档
-                      </button>
-                      <button
-                        onClick={handleStartLearning}
-                        disabled={startingLearning}
-                        className="w-full px-4 py-2.5 text-sm text-left text-teal-300 hover:bg-[var(--bg-tertiary)] transition-colors disabled:opacity-50"
-                      >
-                        {startingLearning ? "处理中..." : "进入内化"}
-                      </button>
-                    </div>
-                  )}
-                </div>
+                </>
               )}
               {!isArchived && !deepReadMode && (
                 <button

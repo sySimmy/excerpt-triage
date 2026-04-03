@@ -11,3 +11,5 @@ node_modules.nosync/
 tsconfig.tsbuildinfo
 .gstack/
 learn-claude-code/
+.venv/
+.superpowers/

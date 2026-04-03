@@ -8,7 +8,8 @@ interface TagEditorProps {
   suggestions: string[];
 }
 
-export default function TagEditor({ tags, onChange, suggestions }: TagEditorProps) {
+export default function TagEditor({ tags: rawTags, onChange, suggestions }: TagEditorProps) {
+  const tags = [...new Set(rawTags)];
   const [input, setInput] = useState("");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(-1);
