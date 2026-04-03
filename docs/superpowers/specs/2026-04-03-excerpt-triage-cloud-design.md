@@ -174,8 +174,10 @@ excerpt-triage-cloud/
 - `POST /api/deep-read` — 现有实现调用 `updateFrontmatterFields()` 写本地文件。云端版本只更新 Supabase status。**必须保留 `activity_log` INSERT**
 - `POST /api/format` — 现有实现用 `fs.readFileSync` 读本地文件内容。云端版本从 Supabase `content` 字段读取
 
+**直接迁移 + AI 调用（DB 查询 + MiniMax）：**
+- `POST /api/suggest-tags` — 调用 `getEffectiveVocab()`（查 `dynamic_vocab` 表）和 `buildSystemPrompt()`（查 `prompt_overrides` 表）后调用 MiniMax API。两个 DB 查询需改用 Supabase
+
 **不变（纯 AI 代理，不涉及 DB 或文件系统）：**
-- `POST /api/suggest-tags` — MiniMax API 调用
 - `POST /api/translate` — MiniMax API 调用（纯代理，翻译结果的存储由 PATCH /api/excerpts/[id] 处理）
 
 **移除（不适用于云端）：**
