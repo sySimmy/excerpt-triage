@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect } from "react";
 
 interface QAMessage {
   question: string;
@@ -17,17 +17,25 @@ export default function QAView({ excerptId, initialMessages = [] }: QAViewProps)
   const [messages, setMessages] = useState<QAMessage[]>(initialMessages);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const [selectedIndex, setSelectedIndex] = useState(
+    initialMessages.length > 0 ? initialMessages.length - 1 : -1,
+  );
+  const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, thinking]);
+    setMessages(initialMessages);
+    setSelectedIndex(initialMessages.length > 0 ? initialMessages.length - 1 : -1);
+    setPendingQuestion(null);
+    setThinking(false);
+  }, [initialMessages]);
 
   async function handleSend() {
     const question = input.trim();
     if (!question || thinking) return;
     setInput("");
     setThinking(true);
+    setPendingQuestion(question);
+    setSelectedIndex(messages.length);
     try {
       const res = await fetch("/api/learning/ask", {
         method: "POST",
@@ -40,18 +48,22 @@ export default function QAView({ excerptId, initialMessages = [] }: QAViewProps)
           ...prev,
           { question, answer: data.answer as string, timestamp: new Date().toISOString() },
         ]);
+        setSelectedIndex(messages.length);
       } else {
         setMessages((prev) => [
           ...prev,
           { question, answer: "出错了，请重试", timestamp: new Date().toISOString() },
         ]);
+        setSelectedIndex(messages.length);
       }
     } catch {
       setMessages((prev) => [
         ...prev,
         { question, answer: "网络错误，请重试", timestamp: new Date().toISOString() },
       ]);
+      setSelectedIndex(messages.length);
     } finally {
+      setPendingQuestion(null);
       setThinking(false);
     }
   }
@@ -67,14 +79,14 @@ export default function QAView({ excerptId, initialMessages = [] }: QAViewProps)
     <div className="h-full flex flex-col">
       {/* Message history */}
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-        {messages.length === 0 && !thinking && (
+        {messages.length === 0 && !thinking && !pendingQuestion && (
           <div className="h-full flex items-center justify-center text-[var(--text-secondary)] text-sm">
             对这篇文章提问吧
           </div>
         )}
 
         {messages.map((msg, i) => (
-          <div key={i} className="space-y-2">
+          <div key={msg.timestamp} data-state={i === selectedIndex ? "selected" : undefined} className="space-y-2">
             {/* Question — right aligned */}
             <div className="flex justify-end">
               <div className="max-w-xs lg:max-w-md px-3 py-2 rounded-lg bg-[var(--accent)]/20 border border-[var(--accent)]/30 text-sm text-[var(--text)] text-right">
@@ -90,15 +102,28 @@ export default function QAView({ excerptId, initialMessages = [] }: QAViewProps)
           </div>
         ))}
 
-        {thinking && (
+        {pendingQuestion && (
+          <div data-state={selectedIndex === messages.length ? "pending" : undefined} className="space-y-2">
+            <div className="flex justify-end">
+              <div className="max-w-xs lg:max-w-md px-3 py-2 rounded-lg bg-[var(--accent)]/20 border border-[var(--accent)]/30 text-sm text-[var(--text)] text-right">
+                {pendingQuestion}
+              </div>
+            </div>
+            <div className="flex justify-start">
+              <div className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border)] text-sm text-[var(--text-secondary)] italic">
+                思考中...
+              </div>
+            </div>
+          </div>
+        )}
+
+        {thinking && !pendingQuestion && (
           <div className="flex justify-start">
             <div className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border)] text-sm text-[var(--text-secondary)] italic">
               思考中...
             </div>
           </div>
         )}
-
-        <div ref={bottomRef} />
       </div>
 
       {/* Input area */}
