@@ -1,11 +1,14 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface QAMessage {
   question: string;
   answer: string;
   timestamp: string;
+  status?: "error";
 }
 
 interface QAViewProps {
@@ -25,6 +28,55 @@ function formatTimestamp(timestamp: string) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function MarkdownAnswer({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({ children }) => <p className="mb-4 last:mb-0">{children}</p>,
+        h1: ({ children }) => <h1 className="mb-4 text-xl font-semibold text-[var(--text)]">{children}</h1>,
+        h2: ({ children }) => <h2 className="mb-3 text-lg font-semibold text-[var(--text)]">{children}</h2>,
+        h3: ({ children }) => <h3 className="mb-3 text-base font-semibold text-[var(--text)]">{children}</h3>,
+        ul: ({ children }) => <ul className="my-4 list-disc space-y-1 pl-5">{children}</ul>,
+        ol: ({ children }) => <ol className="my-4 list-decimal space-y-1 pl-5">{children}</ol>,
+        li: ({ children }) => <li className="pl-1">{children}</li>,
+        blockquote: ({ children }) => (
+          <blockquote className="my-4 border-l-2 border-[var(--accent)]/40 pl-4 text-[var(--text-secondary)]">
+            {children}
+          </blockquote>
+        ),
+        a: ({ href, children, ...props }) => (
+          <a href={href} target="_blank" rel="noreferrer" className="text-[var(--accent)] underline underline-offset-2 hover:text-[var(--accent-hover)]" {...props}>
+            {children}
+          </a>
+        ),
+        code: ({ className, children, ...props }) => {
+          const isBlockCode = className?.includes("language-");
+          return (
+            <code
+              className={
+                isBlockCode
+                  ? "font-mono text-[0.95em] text-[var(--text)]"
+                  : "rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[0.92em] text-[var(--text)]"
+              }
+              {...props}
+            >
+              {children}
+            </code>
+          );
+        },
+        pre: ({ children }) => (
+          <pre className="my-4 overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--bg-tertiary)] p-4 font-mono text-[0.92em] text-[var(--text)]">
+            {children}
+          </pre>
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
 }
 
 export default function QAView({ excerptId, initialMessages = [] }: QAViewProps) {
@@ -49,7 +101,8 @@ export default function QAView({ excerptId, initialMessages = [] }: QAViewProps)
     setInput("");
     setThinking(true);
     setPendingQuestion(question);
-    setSelectedIndex(messages.length);
+    const nextIndex = messages.length;
+    setSelectedIndex(nextIndex);
     try {
       const res = await fetch("/api/learning/ask", {
         method: "POST",
@@ -62,20 +115,20 @@ export default function QAView({ excerptId, initialMessages = [] }: QAViewProps)
           ...prev,
           { question, answer: data.answer as string, timestamp: new Date().toISOString() },
         ]);
-        setSelectedIndex(messages.length);
+        setSelectedIndex(nextIndex);
       } else {
         setMessages((prev) => [
           ...prev,
-          { question, answer: "出错了，请重试", timestamp: new Date().toISOString() },
+          { question, answer: "出错了，请重试", timestamp: new Date().toISOString(), status: "error" },
         ]);
-        setSelectedIndex(messages.length);
+        setSelectedIndex(nextIndex);
       }
     } catch {
       setMessages((prev) => [
         ...prev,
-        { question, answer: "网络错误，请重试", timestamp: new Date().toISOString() },
+        { question, answer: "网络错误，请重试", timestamp: new Date().toISOString(), status: "error" },
       ]);
-      setSelectedIndex(messages.length);
+      setSelectedIndex(nextIndex);
     } finally {
       setPendingQuestion(null);
       setThinking(false);
@@ -92,6 +145,9 @@ export default function QAView({ excerptId, initialMessages = [] }: QAViewProps)
   const pendingSelected = pendingQuestion !== null && selectedIndex === messages.length;
   const selectedMessage = selectedIndex >= 0 && selectedIndex < messages.length ? messages[selectedIndex] : null;
   const focusedQuestion = pendingSelected ? pendingQuestion : selectedMessage?.question ?? null;
+
+  const answerSurfaceClasses =
+    "mx-auto w-full max-w-[72ch] rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] px-5 py-6 text-[15px] leading-7 text-[var(--text)]";
 
   return (
     <div className="h-full flex flex-col">
@@ -137,15 +193,32 @@ export default function QAView({ excerptId, initialMessages = [] }: QAViewProps)
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 py-4">
-              {selectedMessage && !pendingSelected && (
-                <div className="mx-auto max-w-3xl rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] px-5 py-5 text-sm leading-relaxed text-[var(--text)]">
-                  {selectedMessage.answer}
+              {selectedMessage && !pendingSelected && !selectedMessage.status && (
+                <div className={answerSurfaceClasses}>
+                  <MarkdownAnswer content={selectedMessage.answer} />
+                </div>
+              )}
+
+              {selectedMessage && !pendingSelected && selectedMessage.status === "error" && (
+                <div
+                  data-testid="qa-error-card"
+                  role="alert"
+                  className={`${answerSurfaceClasses} border-[var(--accent)]/30 bg-[var(--accent)]/10`}
+                >
+                  <div className="text-xs uppercase tracking-[0.16em] text-[var(--text-secondary)]">回答失败</div>
+                  <div className="mt-3 text-base font-medium text-[var(--text)]">{selectedMessage.answer}</div>
+                  <div className="mt-2 text-sm text-[var(--text-secondary)]">可以重新提问，或换一种问法。</div>
                 </div>
               )}
 
               {pendingSelected && (
-                <div className="mx-auto max-w-3xl rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] px-5 py-5">
-                  <div className="space-y-3" aria-label="回答生成中">
+                <div
+                  data-testid="qa-loading-card"
+                  role="status"
+                  aria-label="回答生成中"
+                  className={answerSurfaceClasses}
+                >
+                  <div className="space-y-3">
                     <div className="h-3 w-5/6 animate-pulse rounded bg-[var(--bg-tertiary)]" />
                     <div className="h-3 w-full animate-pulse rounded bg-[var(--bg-tertiary)]" />
                     <div className="h-3 w-4/5 animate-pulse rounded bg-[var(--bg-tertiary)]" />
