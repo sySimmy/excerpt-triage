@@ -35,9 +35,11 @@ const SOURCE_LABELS: Record<string, string> = {
   rss: "RSS",
   social: "Social",
   article: "Web",
+  web: "Web",
   newsletter: "NL",
   video: "Video",
   report: "Report",
+  "report/paper": "Report",
 };
 
 function formatDate(date: string | null): string {

@@ -10,6 +10,9 @@ import ArchiveFilterBar from "@/components/ArchiveFilterBar";
 import ArchiveGroupList from "@/components/ArchiveGroupList";
 import StatsView from "@/components/StatsView";
 import TagFeedbackView from "@/components/TagFeedbackView";
+import LearningDashboard from "@/components/LearningDashboard";
+import { buildTagFilterOptions, isStaleInboxResponse, shouldSkipInboxLoad } from "@/lib/inbox-filters";
+import { ALL_TAGS } from "@/lib/tag-vocab";
 
 interface ExcerptItem {
   id: number;
@@ -29,6 +32,7 @@ interface Stats {
   read: number;
   archived: number;
   deep_read: number;
+  learning: number;
 }
 
 interface TagStat {
@@ -43,7 +47,7 @@ export interface TranslationState {
   text?: string;
 }
 
-const VALID_VIEWS: ViewKey[] = ["inbox", "deep-read", "archive", "stats", "tag-feedback"];
+const VALID_VIEWS: ViewKey[] = ["inbox", "deep-read", "learning", "archive", "stats", "tag-feedback"];
 
 export default function Home() {
   const [activeView, setActiveViewRaw] = useState<ViewKey>("inbox");
@@ -103,7 +107,7 @@ export default function Home() {
   }
 
   // === Inbox state ===
-  const [filters, setFilters] = useState({ status: "", source_type: "", search: "", tag: "", captured_within: "", sort: "recent", _randomSeed: 0 });
+  const [filters, setFilters] = useState({ status: "", source_type: "", search: "", tag: "", captured_within: "", date_from: "", date_to: "", date_field: "captured" as "captured" | "published", sort: "recent", _randomSeed: 0 });
   const [items, setItems] = useState<ExcerptItem[]>([]);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -111,6 +115,8 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const offsetRef = useRef(0);
+  const inboxRequestIdRef = useRef(0);
+  const inboxLoadingRef = useRef(false);
 
   // === Archive state ===
   const [archiveItems, setArchiveItems] = useState<ExcerptItem[]>([]);
@@ -128,10 +134,9 @@ export default function Home() {
   const [deepReadLoading, setDeepReadLoading] = useState(false);
 
   // Tag suggestions from vocabulary
-  const { data: tagData } = useSWR("/api/tags", fetcher);
-  const dbTags = (tagData ?? []).map((t: { tag: string }) => t.tag);
-  const vocabTags = ["ai-coding", "agents", "pkm", "design", "business", "investing", "life", "claude-code", "openclaw", "obsidian", "cursor", "mcp", "workflow", "deployment", "automation", "content-creation", "go-global", "growth", "quant", "ip", "tutorial", "opinion", "tool", "research", "translation"];
-  const tagSuggestions = [...vocabTags, ...dbTags.filter((t: string) => !vocabTags.includes(t))];
+  const { data: tagData } = useSWR<{ tag: string; count: number }[]>("/api/tags", fetcher);
+  const tagFilterOptions = buildTagFilterOptions(ALL_TAGS, tagData ?? []);
+  const tagSuggestions = tagFilterOptions.map((option) => option.value);
 
   // Initial sync
   useEffect(() => {
@@ -143,7 +148,10 @@ export default function Home() {
   // === Inbox: Load excerpts ===
   const loadExcerpts = useCallback(
     async (reset = false) => {
-      if (loading) return;
+      if (shouldSkipInboxLoad({ loading: inboxLoadingRef.current, reset })) return;
+
+      const requestId = ++inboxRequestIdRef.current;
+      inboxLoadingRef.current = true;
       setLoading(true);
 
       const offset = reset ? 0 : offsetRef.current;
@@ -152,13 +160,21 @@ export default function Home() {
       if (filters.source_type) params.set("source_type", filters.source_type);
       if (filters.search) params.set("search", filters.search);
       if (filters.tag) params.set("tag", filters.tag);
-      if (filters.captured_within) params.set("captured_within", filters.captured_within);
+      if (filters.captured_within === "custom") {
+        if (filters.date_from) params.set("date_from", filters.date_from);
+        if (filters.date_to) params.set("date_to", filters.date_to);
+        if (filters.date_field) params.set("date_field", filters.date_field);
+      } else if (filters.captured_within) {
+        params.set("captured_within", filters.captured_within);
+      }
       if (filters.sort && filters.sort !== "recent") params.set("sort", filters.sort);
       params.set("limit", "50");
       params.set("offset", String(offset));
 
       try {
         const data = await fetcher(`/api/excerpts?${params}`);
+        if (isStaleInboxResponse({ requestId, latestRequestId: inboxRequestIdRef.current })) return;
+
         if (reset) {
           setItems(data.items);
         } else {
@@ -171,10 +187,13 @@ export default function Home() {
         setStats(data.stats);
         offsetRef.current = offset + data.items.length;
       } finally {
-        setLoading(false);
+        if (!isStaleInboxResponse({ requestId, latestRequestId: inboxRequestIdRef.current })) {
+          inboxLoadingRef.current = false;
+          setLoading(false);
+        }
       }
     },
-    [filters, loading]
+    [filters]
   );
 
   // Reload inbox on filter change or init
@@ -308,6 +327,22 @@ export default function Home() {
     });
   }
 
+  // Learning tab: finish session and return to deep-read
+  function handleLearningFinish(id: number) {
+    fetch("/api/learning/finish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    }).then((res) => {
+      if (res.ok) {
+        setActiveView("deep-read");
+        loadDeepRead().then(() => {
+          setDeepReadSelectedId(id);
+        });
+      }
+    });
+  }
+
   // Keyboard: arrow up/down (works in all list views)
   useEffect(() => {
     const currentItems = activeView === "inbox" ? items : activeView === "deep-read" ? deepReadItems : archiveItems;
@@ -354,11 +389,11 @@ export default function Home() {
 
   return (
     <div className="h-screen flex flex-col">
-      <ViewTabs activeView={activeView} onChange={setActiveView} deepReadCount={stats?.deep_read} />
+      <ViewTabs activeView={activeView} onChange={setActiveView} deepReadCount={stats?.deep_read} learningCount={stats?.learning} />
 
       {activeView === "inbox" ? (
         <>
-          <FilterBar filters={filters} onChange={setFilters} stats={stats} />
+          <FilterBar filters={filters} onChange={setFilters} stats={stats} tagOptions={tagFilterOptions} />
           <div className="flex-1 flex overflow-hidden">
             <div className="w-80 flex-shrink-0 border-r border-[var(--border)] bg-[var(--bg)]">
               <ExcerptList
@@ -420,10 +455,20 @@ export default function Home() {
                 onNext={handleDeepReadNext}
                 translationState={deepReadSelectedId ? translations.get(deepReadSelectedId) : undefined}
                 onTranslate={startTranslation}
+                onStartLearning={() => {
+                  setDeepReadItems((prev) => prev.filter((i) => i.id !== deepReadSelectedId));
+                  setDeepReadTotal((prev) => prev - 1);
+                  setStats((prev) => {
+                    if (!prev) return prev;
+                    return { ...prev, deep_read: Math.max(0, prev.deep_read - 1), learning: prev.learning + 1 };
+                  });
+                }}
               />
             </div>
           </div>
         </>
+      ) : activeView === "learning" ? (
+        <LearningDashboard onFinish={handleLearningFinish} />
       ) : activeView === "archive" ? (
         <>
           <ArchiveFilterBar
@@ -460,6 +505,10 @@ export default function Home() {
                 archiveMode
                 translationState={archiveSelectedId ? translations.get(archiveSelectedId) : undefined}
                 onTranslate={startTranslation}
+                onUnarchived={() => {
+                  setArchiveSelectedId(null);
+                  loadArchive();
+                }}
               />
             </div>
           </div>

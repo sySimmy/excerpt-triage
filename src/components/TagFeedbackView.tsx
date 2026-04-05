@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 interface TagStat {
   suggested: number;
@@ -27,6 +27,33 @@ interface Analysis {
   frequentAiRemoves: { tag: string; count: number }[];
 }
 
+interface OptStatus {
+  shouldRun: boolean;
+  feedbackCount: number;
+}
+
+interface OptHistoryItem {
+  id: number;
+  created_at: string;
+  feedback_count: number;
+  total_feedback_count: number;
+  precision_before: number | null;
+  recall_before: number | null;
+  actions_taken: Array<{
+    approved: boolean;
+    type?: string;
+    target_tag?: string;
+    content?: string;
+    reason?: string;
+  }>;
+  ai_response_error: boolean;
+}
+
+interface DynamicVocab {
+  dynamicAdditions: Array<{ tag: string; tier: string; reason: string | null }>;
+  dynamicRemovals: Array<{ tag: string; tier: string; reason: string | null }>;
+}
+
 function pct(n: number): string {
   return `${(n * 100).toFixed(1)}%`;
 }
@@ -48,12 +75,54 @@ function BarCell({ value, max, color }: { value: number; max: number; color: str
 export default function TagFeedbackView() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [loading, setLoading] = useState(true);
+  const [optStatus, setOptStatus] = useState<OptStatus | null>(null);
+  const [optHistory, setOptHistory] = useState<OptHistoryItem[]>([]);
+  const [dynamicVocab, setDynamicVocab] = useState<DynamicVocab>({ dynamicAdditions: [], dynamicRemovals: [] });
+  const [running, setRunning] = useState(false);
+  const [runResult, setRunResult] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/tag-feedback/analysis")
-      .then((r) => r.json())
-      .then(setAnalysis)
+    Promise.all([
+      fetch("/api/tag-feedback/analysis").then((r) => r.json()),
+      fetch("/api/tag-optimization/status").then((r) => r.json()),
+      fetch("/api/tag-optimization/history").then((r) => r.json()),
+      fetch("/api/tag-optimization/vocab").then((r) => r.json()),
+    ])
+      .then(([a, s, h, v]) => {
+        setAnalysis(a);
+        setOptStatus(s);
+        setOptHistory(h);
+        setDynamicVocab(v);
+      })
       .finally(() => setLoading(false));
+  }, []);
+
+  const handleRunOptimization = useCallback(async () => {
+    setRunning(true);
+    setRunResult(null);
+    try {
+      const res = await fetch("/api/tag-optimization/run", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setRunResult(`失败: ${data.error}`);
+      } else {
+        const actionCount = (data.actions ?? []).filter((a: { approved: boolean }) => a.approved).length;
+        setRunResult(`完成: 执行了 ${actionCount} 个优化动作`);
+        // Refresh data
+        const [s, h, v] = await Promise.all([
+          fetch("/api/tag-optimization/status").then((r) => r.json()),
+          fetch("/api/tag-optimization/history").then((r) => r.json()),
+          fetch("/api/tag-optimization/vocab").then((r) => r.json()),
+        ]);
+        setOptStatus(s);
+        setOptHistory(h);
+        setDynamicVocab(v);
+      }
+    } catch (e) {
+      setRunResult(`错误: ${String(e)}`);
+    } finally {
+      setRunning(false);
+    }
   }, []);
 
   if (loading) {
@@ -69,6 +138,10 @@ export default function TagFeedbackView() {
     );
   }
 
+  // Build sets for dynamic tag marking
+  const addedTags = new Set(dynamicVocab.dynamicAdditions.map((d) => d.tag));
+  const removedTags = new Set(dynamicVocab.dynamicRemovals.map((d) => d.tag));
+
   const tagEntries = Object.entries(analysis.tagStats)
     .filter(([, s]) => s.suggested > 0 || s.missedThenAdded > 0)
     .sort((a, b) => (b[1].suggested + b[1].missedThenAdded) - (a[1].suggested + a[1].missedThenAdded));
@@ -78,6 +151,23 @@ export default function TagFeedbackView() {
   return (
     <div className="p-5 space-y-6 overflow-y-auto max-h-[calc(100vh-120px)]">
       <h2 className="text-lg font-semibold">AI 打标准确率分析</h2>
+
+      {/* Optimization trigger banner */}
+      {optStatus?.shouldRun && (
+        <div className="border border-[var(--accent)]/40 rounded-lg p-4 bg-[var(--accent)]/5 flex items-center justify-between">
+          <div>
+            <span className="text-sm font-medium">已积累 {optStatus.feedbackCount} 条新反馈，可运行优化</span>
+            {runResult && <p className="text-xs text-[var(--text-secondary)] mt-1">{runResult}</p>}
+          </div>
+          <button
+            onClick={handleRunOptimization}
+            disabled={running}
+            className="px-3 py-1.5 text-sm rounded bg-[var(--accent)] text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {running ? "优化中..." : "运行优化"}
+          </button>
+        </div>
+      )}
 
       {/* Overall metrics */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -109,9 +199,21 @@ export default function TagFeedbackView() {
             <tbody>
               {tagEntries.map(([tag, stat]) => {
                 const acc = stat.suggested > 0 ? stat.kept / stat.suggested : 0;
+                const isDynamic = addedTags.has(tag);
+                const isDemoted = removedTags.has(tag);
                 return (
                   <tr key={tag} className="border-t border-[var(--border)] hover:bg-[var(--bg-tertiary)]">
-                    <td className="px-2 py-1.5 font-mono text-xs">{tag}</td>
+                    <td className="px-2 py-1.5 font-mono text-xs">
+                      <span className={isDemoted ? "line-through text-[var(--text-secondary)]" : ""}>
+                        {tag}
+                      </span>
+                      {isDynamic && (
+                        <span className="ml-1 px-1 py-0.5 text-[10px] rounded bg-green-500/20 text-green-400">+动态</span>
+                      )}
+                      {isDemoted && (
+                        <span className="ml-1 px-1 py-0.5 text-[10px] rounded bg-red-500/20 text-red-400">已降权</span>
+                      )}
+                    </td>
                     <BarCell value={stat.suggested} max={maxSuggested} color="bg-blue-500" />
                     <BarCell value={stat.kept} max={maxSuggested} color="bg-green-500" />
                     <BarCell value={stat.removed} max={maxSuggested} color="bg-red-500" />
@@ -129,7 +231,6 @@ export default function TagFeedbackView() {
 
       {/* Optimization insights */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* AI frequently wrong */}
         {analysis.frequentAiRemoves.length > 0 && (
           <div className="border border-[var(--border)] rounded p-3">
             <h3 className="text-sm font-semibold mb-2 text-red-400">AI 常错标签（经常被你删除）</h3>
@@ -145,7 +246,6 @@ export default function TagFeedbackView() {
           </div>
         )}
 
-        {/* AI frequently misses */}
         {analysis.frequentUserAdds.length > 0 && (
           <div className="border border-[var(--border)] rounded p-3">
             <h3 className="text-sm font-semibold mb-2 text-yellow-400">AI 常漏标签（经常需要手动补充）</h3>
@@ -193,6 +293,65 @@ export default function TagFeedbackView() {
 
       {/* Prompt optimization hints */}
       <PromptHints analysis={analysis} />
+
+      {/* Optimization history */}
+      {optHistory.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold mb-2 text-[var(--text-secondary)]">优化运行历史</h3>
+          <div className="space-y-3">
+            {optHistory.map((run) => {
+              const approved = run.actions_taken.filter((a) => a.approved);
+              const rejected = run.actions_taken.filter((a) => !a.approved);
+              return (
+                <div key={run.id} className="border border-[var(--border)] rounded p-3 text-sm">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-medium">
+                      {run.created_at.replace("T", " ").slice(0, 16)}
+                    </span>
+                    <span className="text-xs text-[var(--text-secondary)]">
+                      全量 {run.total_feedback_count} 条，新增 {run.feedback_count} 条
+                    </span>
+                  </div>
+                  {run.precision_before != null && (
+                    <div className="text-xs text-[var(--text-secondary)] mb-2">
+                      精确率: {pct(run.precision_before)}
+                      {run.recall_before != null && ` | 召回率: ${pct(run.recall_before)}`}
+                    </div>
+                  )}
+                  {run.ai_response_error && (
+                    <div className="text-xs text-red-400 mb-2">AI 响应异常，本轮未执行优化</div>
+                  )}
+                  {approved.length > 0 && (
+                    <div className="space-y-1">
+                      {approved.map((a, i) => (
+                        <div key={i} className="flex items-start gap-2 text-xs">
+                          <span className="flex-shrink-0">
+                            {a.type === "promote_candidate" && "✅"}
+                            {a.type === "demote_tag" && "⛔"}
+                            {a.type === "few_shot" && "📝"}
+                            {a.type === "negative_example" && "⚠️"}
+                            {a.type === "tag_note" && "📋"}
+                            {a.type === "rule_adjustment" && "⚙️"}
+                          </span>
+                          <span>
+                            {a.target_tag && <span className="font-mono">{a.target_tag}</span>}
+                            {a.content && <span className="text-[var(--text-secondary)]"> — {a.content.slice(0, 60)}{a.content.length > 60 ? "..." : ""}</span>}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {rejected.length > 0 && (
+                    <div className="mt-1 text-xs text-[var(--text-secondary)]">
+                      AI 否决了 {rejected.length} 个提案
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -217,7 +376,6 @@ function PromptHints({ analysis }: { analysis: Analysis }) {
     hints.push("召回率偏低 — AI 遗漏了较多你需要的标签。考虑在 prompt 中给出更多标签使用场景的描述。");
   }
 
-  // Tags with < 40% accuracy but suggested > 2 times
   const badTags = Object.entries(analysis.tagStats)
     .filter(([, s]) => s.suggested >= 3 && s.kept / s.suggested < 0.4)
     .map(([tag]) => tag);
@@ -225,7 +383,6 @@ function PromptHints({ analysis }: { analysis: Analysis }) {
     hints.push(`以下标签准确率低于 40%，建议在 prompt 中添加使用条件或排除说明：${badTags.join(", ")}`);
   }
 
-  // Tags frequently added by user but never suggested
   const missedTags = Object.entries(analysis.tagStats)
     .filter(([, s]) => s.suggested === 0 && s.missedThenAdded >= 2)
     .map(([tag]) => tag);
@@ -233,7 +390,6 @@ function PromptHints({ analysis }: { analysis: Analysis }) {
     hints.push(`以下标签 AI 从未推荐但你多次手动添加，考虑在 prompt 中增加 few-shot 示例：${missedTags.join(", ")}`);
   }
 
-  // Candidate acceptance rate
   if (analysis.candidateStats.total >= 5 && analysis.candidateStats.accepted / analysis.candidateStats.total > 0.5) {
     const topAccepted = analysis.frequentUserAdds
       .filter(({ tag }) => !(tag in analysis.tagStats) || analysis.tagStats[tag].suggested === 0)

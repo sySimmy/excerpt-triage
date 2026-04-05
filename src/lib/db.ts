@@ -1,8 +1,11 @@
 import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
+import { expandSourceTypeFilter } from "@/lib/inbox-filters";
 
-const DB_PATH = path.join(process.cwd(), "excerpt-triage.db");
+const DB_DIR = path.join(process.cwd(), ".nosync");
+if (!fs.existsSync(DB_DIR)) fs.mkdirSync(DB_DIR);
+const DB_PATH = path.join(DB_DIR, "excerpt-triage.db");
 const SCHEMA_PATH = path.join(process.cwd(), "db", "schema.sql");
 
 let _db: Database.Database | null = null;
@@ -76,7 +79,7 @@ export function upsertExcerpt(data: Omit<ExcerptRow, "id" | "created_at" | "upda
       captured_at = @captured_at,
       topic = @topic,
       signal = CASE WHEN excerpts.signal > 0 THEN excerpts.signal ELSE @signal END,
-      status = CASE WHEN excerpts.status IN ('deep_read', 'archived') THEN excerpts.status ELSE @status END,
+      status = CASE WHEN excerpts.status IN ('deep_read', 'learning', 'archived') THEN excerpts.status ELSE @status END,
       tags = CASE WHEN excerpts.tags != '[]' THEN excerpts.tags ELSE @tags END,
       location = CASE WHEN excerpts.location = 'archived' THEN excerpts.location ELSE @location END,
       updated_at = datetime('now')
@@ -92,9 +95,13 @@ export function getExcerpts(filters: {
   tag?: string;
   search?: string;
   captured_after?: string;
+  captured_before?: string;
+  published_after?: string;
+  published_before?: string;
   sort?: string;
   exclude_archived?: boolean;
   exclude_deep_read?: boolean;
+  exclude_learning?: boolean;
   limit?: number;
   offset?: number;
 }): { items: ExcerptRow[]; total: number } {
@@ -108,13 +115,26 @@ export function getExcerpts(filters: {
   if (filters.exclude_deep_read) {
     conditions.push("status != 'deep_read'");
   }
+  if (filters.exclude_learning) {
+    conditions.push("status != 'learning'");
+  }
   if (filters.status) {
     conditions.push("status = @status");
     params.status = filters.status;
   }
   if (filters.source_type) {
-    conditions.push("source_type = @source_type");
-    params.source_type = filters.source_type;
+    const sourceTypes = expandSourceTypeFilter(filters.source_type);
+    if (sourceTypes.length === 1) {
+      conditions.push("source_type = @source_type");
+      params.source_type = sourceTypes[0];
+    } else {
+      const placeholders = sourceTypes.map((sourceType, index) => {
+        const key = `source_type_${index}`;
+        params[key] = sourceType;
+        return `@${key}`;
+      });
+      conditions.push(`source_type IN (${placeholders.join(", ")})`);
+    }
   }
   if (filters.signal_min !== undefined) {
     conditions.push("signal >= @signal_min");
@@ -135,6 +155,18 @@ export function getExcerpts(filters: {
   if (filters.captured_after) {
     conditions.push("COALESCE(captured_at, date(created_at)) >= @captured_after");
     params.captured_after = filters.captured_after;
+  }
+  if (filters.captured_before) {
+    conditions.push("COALESCE(captured_at, date(created_at)) <= @captured_before");
+    params.captured_before = filters.captured_before;
+  }
+  if (filters.published_after) {
+    conditions.push("published_at >= @published_after");
+    params.published_after = filters.published_after;
+  }
+  if (filters.published_before) {
+    conditions.push("published_at <= @published_before");
+    params.published_before = filters.published_before;
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -550,10 +582,10 @@ export function getDeepReadExcerpts(filters: {
   return { items, total: total.count };
 }
 
-export function getStats(): { total: number; to_process: number; reading: number; read: number; archived: number; deep_read: number } {
+export function getStats(): { total: number; to_process: number; reading: number; read: number; archived: number; deep_read: number; learning: number } {
   const db = getDb();
   const rows = db.prepare("SELECT status, COUNT(*) as count FROM excerpts GROUP BY status").all() as { status: string; count: number }[];
-  const stats = { total: 0, to_process: 0, reading: 0, read: 0, archived: 0, deep_read: 0 };
+  const stats = { total: 0, to_process: 0, reading: 0, read: 0, archived: 0, deep_read: 0, learning: 0 };
   for (const row of rows) {
     stats.total += row.count;
     if (row.status in stats) {
@@ -561,4 +593,120 @@ export function getStats(): { total: number; to_process: number; reading: number
     }
   }
   return stats;
+}
+
+export function ensureLearningTables() {
+  const db = getDb();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS learning_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      excerpt_id INTEGER NOT NULL UNIQUE,
+      notebooklm_source_id TEXT NOT NULL,
+      conversation_id TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_learning_sessions_excerpt ON learning_sessions(excerpt_id);
+    CREATE TABLE IF NOT EXISTS learning_materials (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      excerpt_id INTEGER NOT NULL,
+      tool_type TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(excerpt_id, tool_type)
+    );
+    CREATE INDEX IF NOT EXISTS idx_learning_materials_excerpt ON learning_materials(excerpt_id);
+  `);
+}
+
+// === Learning ===
+
+export function createLearningSession(excerptId: number, sourceId: string) {
+  ensureLearningTables();
+  const db = getDb();
+  db.prepare(
+    "INSERT OR IGNORE INTO learning_sessions (excerpt_id, notebooklm_source_id) VALUES (?, ?)"
+  ).run(excerptId, sourceId);
+}
+
+export function getLearningSession(excerptId: number): { excerpt_id: number; notebooklm_source_id: string; conversation_id: string | null } | undefined {
+  ensureLearningTables();
+  const db = getDb();
+  return db.prepare("SELECT * FROM learning_sessions WHERE excerpt_id = ?").get(excerptId) as { excerpt_id: number; notebooklm_source_id: string; conversation_id: string | null } | undefined;
+}
+
+export function updateConversationId(excerptId: number, conversationId: string) {
+  ensureLearningTables();
+  const db = getDb();
+  db.prepare("UPDATE learning_sessions SET conversation_id = ? WHERE excerpt_id = ?").run(conversationId, excerptId);
+}
+
+export function deleteLearningSession(excerptId: number) {
+  ensureLearningTables();
+  const db = getDb();
+  db.prepare("DELETE FROM learning_sessions WHERE excerpt_id = ?").run(excerptId);
+}
+
+export function saveLearningMaterial(excerptId: number, toolType: string, content: string) {
+  ensureLearningTables();
+  const db = getDb();
+  db.prepare(
+    "INSERT OR REPLACE INTO learning_materials (excerpt_id, tool_type, content) VALUES (?, ?, ?)"
+  ).run(excerptId, toolType, content);
+}
+
+export function getLearningMaterial(excerptId: number, toolType: string): { content: string } | undefined {
+  ensureLearningTables();
+  const db = getDb();
+  return db.prepare(
+    "SELECT content FROM learning_materials WHERE excerpt_id = ? AND tool_type = ?"
+  ).get(excerptId, toolType) as { content: string } | undefined;
+}
+
+export function getLearningProgress(excerptId: number): number {
+  ensureLearningTables();
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT COUNT(*) as count FROM learning_materials WHERE excerpt_id = ?"
+  ).get(excerptId) as { count: number };
+  return row.count;
+}
+
+export function deleteLearningMaterials(excerptId: number) {
+  ensureLearningTables();
+  const db = getDb();
+  db.prepare("DELETE FROM learning_materials WHERE excerpt_id = ?").run(excerptId);
+}
+
+export function getLearningExcerpts(filters: {
+  search?: string;
+  limit?: number;
+  offset?: number;
+}): { items: (ExcerptRow & { progress: number })[]; total: number } {
+  ensureLearningTables();
+  const db = getDb();
+  const conditions: string[] = ["e.status = 'learning'", "e.location != 'archived'"];
+  const params: Record<string, unknown> = {};
+
+  if (filters.search) {
+    conditions.push("(e.title LIKE @search OR e.topic LIKE @search)");
+    params.search = `%${filters.search}%`;
+  }
+
+  const where = `WHERE ${conditions.join(" AND ")}`;
+  const limit = filters.limit ?? 200;
+  const offset = filters.offset ?? 0;
+
+  const total = db.prepare(`SELECT COUNT(*) as count FROM excerpts e ${where}`).get(params) as { count: number };
+  const items = db.prepare(`
+    SELECT e.*, COALESCE(lm.progress, 0) as progress
+    FROM excerpts e
+    LEFT JOIN (
+      SELECT excerpt_id, COUNT(*) as progress FROM learning_materials GROUP BY excerpt_id
+    ) lm ON lm.excerpt_id = e.id
+    ${where}
+    ORDER BY e.updated_at DESC, e.id DESC
+    LIMIT @limit OFFSET @offset
+  `).all({ ...params, limit, offset }) as (ExcerptRow & { progress: number })[];
+
+  return { items, total: total.count };
 }

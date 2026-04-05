@@ -30,6 +30,8 @@ interface ReadingPanelProps {
   onDeleted?: () => void;
   onNext?: () => void;
   onDeepRead?: () => void;
+  onUnarchived?: () => void;
+  onStartLearning?: () => void;
   archiveMode?: boolean;
   deepReadMode?: boolean;
   translationState?: TranslationState;
@@ -45,7 +47,9 @@ const SOURCE_OPTIONS = [
   { value: "report", label: "Report" },
 ];
 
-export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, onDeleted, onNext, onDeepRead, archiveMode, deepReadMode, translationState, onTranslate }: ReadingPanelProps) {
+const ARCHIVE_CONFIRMATION_MESSAGE = "确定归档这篇文章？";
+
+export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, onDeleted, onNext, onDeepRead, onUnarchived, onStartLearning, archiveMode, deepReadMode, translationState, onTranslate }: ReadingPanelProps) {
   const [excerpt, setExcerpt] = useState<ExcerptDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
@@ -56,6 +60,14 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
   const [suggesting, setSuggesting] = useState(false);
   const [candidates, setCandidates] = useState<string[]>([]);
   const [showTranslation, setShowTranslation] = useState(false);
+  const [formatting, setFormatting] = useState(false);
+  const [formattedContent, setFormattedContent] = useState<string | null>(null);
+  const [showFormatted, setShowFormatted] = useState(false);
+  const [pushingToNblm, setPushingToNblm] = useState(false);
+  const [nblmResult, setNblmResult] = useState<"success" | "error" | null>(null);
+  const [showArchiveChoice, setShowArchiveChoice] = useState(false);
+  const [startingLearning, setStartingLearning] = useState(false);
+  const [hasLearningSession, setHasLearningSession] = useState(false);
 
   // AI tag tracking state
   const [tagsBeforeAI, setTagsBeforeAI] = useState<string[]>([]);
@@ -95,6 +107,80 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
       return;
     }
     onTranslate?.(excerptId, excerpt.content);
+  }
+
+  // AI format
+  async function handleFormat() {
+    if (!excerptId || formatting) return;
+    if (formattedContent) {
+      setShowFormatted(!showFormatted);
+      return;
+    }
+    setFormatting(true);
+    try {
+      const res = await fetch("/api/format", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: excerptId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.content) {
+          setFormattedContent(data.content);
+          setShowFormatted(true);
+        }
+      }
+    } finally {
+      setFormatting(false);
+    }
+  }
+
+  // Push to NotebookLM
+  async function handlePushToNotebookLM() {
+    if (!excerptId || pushingToNblm) return;
+    setPushingToNblm(true);
+    setNblmResult(null);
+    try {
+      const res = await fetch("/api/notebooklm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: excerptId }),
+      });
+      if (res.ok) {
+        setNblmResult("success");
+        setTimeout(() => setNblmResult(null), 3000);
+      } else {
+        const data = await res.json();
+        console.error("NotebookLM push failed:", data.error);
+        setNblmResult("error");
+        setTimeout(() => setNblmResult(null), 5000);
+      }
+    } catch {
+      setNblmResult("error");
+      setTimeout(() => setNblmResult(null), 5000);
+    } finally {
+      setPushingToNblm(false);
+    }
+  }
+
+  // Start learning session
+  async function handleStartLearning() {
+    if (!excerptId || startingLearning) return;
+    setStartingLearning(true);
+    try {
+      const res = await fetch("/api/learning/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: excerptId }),
+      });
+      if (res.ok) {
+        setShowArchiveChoice(false);
+        onStartLearning?.();
+        onNext?.();
+      }
+    } finally {
+      setStartingLearning(false);
+    }
   }
 
   // AI tag suggestion
@@ -147,9 +233,14 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
       setExcerpt(null);
       return;
     }
+    setFormattedContent(null);
+    setShowFormatted(false);
     setLoading(true);
     setShowTranslation(false);
     setCandidates([]);
+    setNblmResult(null);
+    setShowArchiveChoice(false);
+    setHasLearningSession(false);
     // Reset AI tracking
     setTagsBeforeAI([]);
     setAiSuggestedTags([]);
@@ -169,6 +260,11 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
         setSourceType(data.source_type ?? "");
       })
       .finally(() => setLoading(false));
+    // Check if returning from learning (needs learning archive route)
+    fetch(`/api/learning/material?excerpt_id=${excerptId}&tool_type=summary`)
+      .then((r) => r.json())
+      .then((data) => setHasLearningSession(data.exists))
+      .catch(() => setHasLearningSession(false));
   }, [excerptId]);
 
   // Auto-save on tag/signal/sourceType change
@@ -218,11 +314,13 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
   // Archive
   async function handleArchive() {
     if (!excerptId || archiving) return;
+    if (!confirm(ARCHIVE_CONFIRMATION_MESSAGE)) return;
     setArchiving(true);
     try {
       // Save tag feedback before archiving
       await saveTagFeedback(tags);
-      const res = await fetch("/api/archive", {
+      const archiveUrl = hasLearningSession ? "/api/learning/archive" : "/api/archive";
+      const res = await fetch(archiveUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: excerptId, tags, signal, source_type: sourceType }),
@@ -233,6 +331,19 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
       }
     } finally {
       setArchiving(false);
+    }
+  }
+
+  // Unarchive — move back to inbox
+  async function handleUnarchive() {
+    if (!excerptId) return;
+    const res = await fetch("/api/archive/unarchive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: excerptId }),
+    });
+    if (res.ok) {
+      onUnarchived?.();
     }
   }
 
@@ -277,7 +388,7 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
       if (archiveMode) {
-        // In archive mode, only allow rating and tag shortcuts
+        // In archive mode: rating, tag, translate, format, unarchive
         if (e.key >= "1" && e.key <= "5") {
           setSignal(Number(e.key));
         } else if (e.key === "t" || e.key === "T") {
@@ -286,11 +397,17 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
         } else if (e.key === "f" || e.key === "F") {
           e.preventDefault();
           handleTranslate();
+        } else if (e.key === "g" || e.key === "G") {
+          e.preventDefault();
+          handleFormat();
+        } else if (e.key === "u" || e.key === "U") {
+          e.preventDefault();
+          handleUnarchive();
         }
         return;
       }
       if (deepReadMode) {
-        // In deep-read mode: archive, delete, skip, rate, tags, translate
+        // In deep-read mode: archive, delete, skip, rate, tags, translate, format
         if (e.key === "Enter" && excerptId) {
           e.preventDefault();
           handleArchive();
@@ -308,6 +425,9 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
         } else if (e.key === "f" || e.key === "F") {
           e.preventDefault();
           handleTranslate();
+        } else if (e.key === "g" || e.key === "G") {
+          e.preventDefault();
+          handleFormat();
         }
         return;
       }
@@ -332,6 +452,9 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
       } else if (e.key === "f" || e.key === "F") {
         e.preventDefault();
         handleTranslate();
+      } else if (e.key === "g" || e.key === "G") {
+        e.preventDefault();
+        handleFormat();
       }
     }
     window.addEventListener("keydown", handleKey);
@@ -384,19 +507,25 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-5 py-4">
-        {/* Translate bar - only show for English content */}
-        {isEnglishContent(excerpt.content) && (
-          <div className="flex items-center gap-2 mb-3 pb-3 border-b border-[var(--border)]">
-            <span className="text-xs text-[var(--text-secondary)]">检测到英文内容</span>
+        {/* Content toolbar */}
+        <div className="flex items-center gap-2 mb-3 pb-3 border-b border-[var(--border)]">
+          <button
+            onClick={handleFormat}
+            disabled={formatting}
+            className="px-2.5 py-1 text-xs bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 rounded hover:bg-cyan-500/30 transition-colors disabled:opacity-50"
+          >
+            {formatting ? "排版中..." : formattedContent ? (showFormatted ? "显示原文" : "显示排版") : "AI 排版"}
+          </button>
+          {isEnglishContent(excerpt.content) && (
             <button
               onClick={handleTranslate}
               disabled={translating}
               className="px-2.5 py-1 text-xs bg-orange-500/20 border border-orange-500/30 text-orange-300 rounded hover:bg-orange-500/30 transition-colors disabled:opacity-50"
             >
-              {translating ? "翻译中（长文分段翻译）..." : translation ? (showTranslation ? "显示原文" : "显示翻译") : translationState?.status === "error" ? "翻译失败，重试" : "翻译全文"}
+              {translating ? "翻译中..." : translation ? (showTranslation ? "显示原文" : "显示翻译") : translationState?.status === "error" ? "翻译失败，重试" : "翻译全文"}
             </button>
-          </div>
-        )}
+          )}
+        </div>
 
         <div className="markdown-content max-w-none">
           <ReactMarkdown
@@ -405,9 +534,10 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
               a: ({ href, children, ...props }) => (
                 <a href={href} target="_blank" rel="noreferrer" {...props}>{children}</a>
               ),
+              img: ({ src, ...props }) => src ? <img src={src} {...props} /> : null,
             }}
           >
-            {showTranslation && translation ? translation : excerpt.content}
+            {showTranslation && translation ? translation : showFormatted && formattedContent ? formattedContent : excerpt.content}
           </ReactMarkdown>
         </div>
       </div>
@@ -478,11 +608,20 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
           {/* Actions */}
           <span className="text-xs text-[var(--text-secondary)]">
             {archiveMode
-              ? "1-5 评分 · T AI标签 · F 翻译 · E 编辑标签"
+              ? "1-5 评分 · T AI标签 · F 翻译 · G 排版 · U 移回收件箱"
               : deepReadMode
-              ? "S 跳过 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译"
-              : "S 跳过 · R 精读 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译"}
+              ? "S 跳过 · Enter 归档/内化 · D 删除 · 1-5 评分 · T AI标签 · F 翻译 · G 排版"
+              : "S 跳过 · R 精读 · Enter 归档 · D 删除 · 1-5 评分 · T AI标签 · F 翻译 · G 排版"}
           </span>
+
+          {archiveMode && (
+            <button
+              onClick={handleUnarchive}
+              className="px-3 py-1.5 text-sm bg-amber-600/20 border border-amber-500/30 text-amber-300 rounded hover:bg-amber-600/30 transition-colors"
+            >
+              移回收件箱
+            </button>
+          )}
 
           {!archiveMode && (
             <>
@@ -510,7 +649,25 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
                 </button>
               )}
 
-              {!isArchived && (
+              {!isArchived && deepReadMode && (
+                <>
+                  <button
+                    onClick={handleStartLearning}
+                    disabled={startingLearning}
+                    className="px-3 py-1.5 text-sm bg-teal-600/20 border border-teal-500/30 text-teal-300 rounded hover:bg-teal-600/30 transition-colors disabled:opacity-50"
+                  >
+                    {startingLearning ? "处理中..." : "进入内化"}
+                  </button>
+                  <button
+                    onClick={handleArchive}
+                    disabled={archiving}
+                    className="px-4 py-1.5 text-sm bg-[var(--accent)] text-white rounded hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50"
+                  >
+                    {archiving ? "归档中..." : "归档 →"}
+                  </button>
+                </>
+              )}
+              {!isArchived && !deepReadMode && (
                 <button
                   onClick={handleArchive}
                   disabled={archiving}

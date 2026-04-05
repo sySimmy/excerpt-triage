@@ -1,9 +1,15 @@
 node_modules/
+node_modules.nosync/
 .next/
+.next.nosync/
 *.db
 *.db-shm
 *.db-wal
+.nosync/
 .env.local
 .DS_Store
 tsconfig.tsbuildinfo
 .gstack/
+learn-claude-code/
+.venv/
+.superpowers/

@@ -1,12 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getActivityByDateRange } from "@/lib/db";
-
-const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY;
-const MINIMAX_MODEL = process.env.MINIMAX_MODEL ?? "MiniMax-Text-01";
-const MINIMAX_URL = "https://api.minimax.chat/v1/text/chatcompletion_v2";
+import { isMinimaxConfigured, minimaxChat } from "@/lib/minimax";
 
 export async function POST(request: NextRequest) {
-  if (!MINIMAX_API_KEY) {
+  if (!isMinimaxConfigured()) {
     return NextResponse.json({ error: "MINIMAX_API_KEY not configured" }, { status: 500 });
   }
 
@@ -44,29 +41,13 @@ ${items}
 语气轻松专业，像一个助手在帮用户回顾${period}的阅读。直接输出总结，不要加标题或前缀。`;
 
   try {
-    const res = await fetch(MINIMAX_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${MINIMAX_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: MINIMAX_MODEL,
-        messages: [
-          { role: "user", content: prompt },
-        ],
-        temperature: 0.5,
-        max_tokens: 500,
-      }),
+    const summary = await minimaxChat({
+      messages: [
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.5,
+      max_tokens: 2000,
     });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`MiniMax API error ${res.status}: ${err}`);
-    }
-
-    const data = await res.json();
-    const summary = data.choices?.[0]?.message?.content ?? "";
     return NextResponse.json({ summary });
   } catch (e) {
     console.error("AI summary failed:", e);

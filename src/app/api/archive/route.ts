@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { archiveExcerpt, deleteExcerptFile } from "@/lib/archiver";
 import { getExcerptById, logActivity } from "@/lib/db";
-
-const VAULT_PATH = process.env.VAULT_PATH!;
+import { VAULT_PATH } from "@/lib/env";
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
@@ -12,8 +11,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
 
-  // Log activity before archiving
   const excerpt = getExcerptById(id);
+  const result = archiveExcerpt(VAULT_PATH, id, { tags, signal, source_type, topic });
+
+  if (!result.success) {
+    return NextResponse.json({ error: result.error }, { status: 400 });
+  }
+
+  // Log activity after successful archive
   if (excerpt) {
     logActivity({
       excerpt_id: id,
@@ -24,12 +29,6 @@ export async function POST(request: NextRequest) {
       tags: tags ? JSON.stringify(tags) : excerpt.tags,
       signal: signal ?? excerpt.signal,
     });
-  }
-
-  const result = archiveExcerpt(VAULT_PATH, id, { tags, signal, source_type, topic });
-
-  if (!result.success) {
-    return NextResponse.json({ error: result.error }, { status: 400 });
   }
 
   return NextResponse.json({ success: true, newPath: result.newPath });
@@ -43,8 +42,15 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ error: "id is required" }, { status: 400 });
   }
 
-  // Log activity before deleting
+  // Read excerpt info before deletion (file will be gone after)
   const excerpt = getExcerptById(id);
+  const result = deleteExcerptFile(VAULT_PATH, id);
+
+  if (!result.success) {
+    return NextResponse.json({ error: result.error }, { status: 400 });
+  }
+
+  // Log activity after successful delete
   if (excerpt) {
     logActivity({
       excerpt_id: id,
@@ -55,12 +61,6 @@ export async function DELETE(request: NextRequest) {
       tags: excerpt.tags,
       signal: excerpt.signal,
     });
-  }
-
-  const result = deleteExcerptFile(VAULT_PATH, id);
-
-  if (!result.success) {
-    return NextResponse.json({ error: result.error }, { status: 400 });
   }
 
   return NextResponse.json({ success: true });
