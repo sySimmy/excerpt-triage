@@ -79,6 +79,12 @@ function MarkdownAnswer({ content }: { content: string }) {
   );
 }
 
+const EMPTY_PROMPTS = [
+  "这篇文章的核心观点是什么？",
+  "作者用了哪些例子来支撑结论？",
+  "如果我要复述给别人，应该怎么说？",
+];
+
 export default function QAView({ excerptId, initialMessages = [] }: QAViewProps) {
   const [messages, setMessages] = useState<QAMessage[]>(initialMessages);
   const [input, setInput] = useState("");
@@ -166,13 +172,21 @@ export default function QAView({ excerptId, initialMessages = [] }: QAViewProps)
                     type="button"
                     onClick={() => setSelectedIndex(i)}
                     data-state={isSelected ? "selected" : undefined}
+                    aria-current={isSelected ? "true" : undefined}
                     aria-pressed={isSelected}
-                    className={`min-w-[180px] rounded-lg border px-3 py-2 text-left transition-colors md:min-w-0 ${
+                    className={`group relative min-w-[180px] overflow-hidden rounded-lg border px-3 py-2 text-left transition-colors md:min-w-0 ${
                       isSelected
-                        ? "border-[var(--accent)]/40 bg-[var(--accent)]/10 text-[var(--text)]"
-                        : "border-[var(--border)] bg-[var(--bg-tertiary)]/60 text-[var(--text-secondary)] hover:text-[var(--text)]"
+                        ? "border-[var(--accent)]/50 bg-[var(--accent)]/15 font-semibold text-[var(--text)] shadow-sm"
+                        : "border-[var(--border)] bg-[var(--bg-tertiary)]/60 text-[var(--text-secondary)] hover:border-[var(--border)]/80 hover:bg-[var(--bg-tertiary)] hover:text-[var(--text)]"
                     }`}
                   >
+                    {isSelected && (
+                      <span
+                        data-testid="qa-history-active-marker"
+                        aria-hidden="true"
+                        className="absolute inset-y-0 left-0 w-1 bg-[var(--accent)]"
+                      />
+                    )}
                     <div className="truncate text-sm font-medium">{msg.question}</div>
                     <div className="mt-1 text-xs text-[var(--text-secondary)]">{formatTimestamp(msg.timestamp)}</div>
                   </button>
@@ -227,8 +241,23 @@ export default function QAView({ excerptId, initialMessages = [] }: QAViewProps)
               )}
 
               {!selectedMessage && !pendingSelected && (
-                <div className="flex h-full items-center justify-center text-center text-sm text-[var(--text-secondary)]">
-                  对这篇文章提问吧
+                <div className="flex h-full items-center justify-center px-2 py-6">
+                  <div className="w-full max-w-xl rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] px-5 py-6 text-center shadow-sm">
+                    <div className="text-xs uppercase tracking-[0.16em] text-[var(--text-secondary)]">还没有开始提问</div>
+                    <div className="mt-3 text-base font-medium text-[var(--text)]">
+                      从一条问题开始，让回答区专注展示当前答案。
+                    </div>
+                    <div className="mt-4 space-y-2 text-sm text-[var(--text-secondary)]">
+                      {EMPTY_PROMPTS.map((prompt) => (
+                        <div
+                          key={prompt}
+                          className="rounded-lg border border-[var(--border)] bg-[var(--bg-tertiary)]/70 px-3 py-2 text-left"
+                        >
+                          {prompt}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -237,22 +266,24 @@ export default function QAView({ excerptId, initialMessages = [] }: QAViewProps)
       </div>
 
       {/* Input area */}
-      <div className="px-4 py-3 border-t border-[var(--border)] bg-[var(--bg-secondary)] flex gap-2 items-end">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="输入问题... (Enter 发送, Shift+Enter 换行)"
-          rows={2}
-          className="flex-1 resize-none bg-[var(--bg-tertiary)] border border-[var(--border)] rounded px-3 py-2 text-sm text-[var(--text)] placeholder-[var(--text-secondary)] focus:outline-none focus:border-[var(--accent)]/50 transition-colors"
-        />
-        <button
-          onClick={handleSend}
-          disabled={thinking || !input.trim()}
-          className="px-4 py-2 text-sm bg-[var(--accent)] text-white rounded hover:bg-[var(--accent-hover)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-        >
-          发送
-        </button>
+      <div className="border-t border-[var(--border)] bg-[var(--bg-secondary)] px-4 py-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="输入问题... (Enter 发送, Shift+Enter 换行)"
+            rows={2}
+            className="min-h-[88px] flex-1 resize-none rounded border border-[var(--border)] bg-[var(--bg-tertiary)] px-3 py-2 text-sm text-[var(--text)] placeholder-[var(--text-secondary)] transition-colors focus:border-[var(--accent)]/50 focus:outline-none"
+          />
+          <button
+            onClick={handleSend}
+            disabled={thinking || !input.trim()}
+            className="flex-shrink-0 rounded bg-[var(--accent)] px-4 py-2 text-sm text-white transition-colors hover:bg-[var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+          >
+            发送
+          </button>
+        </div>
       </div>
     </div>
   );

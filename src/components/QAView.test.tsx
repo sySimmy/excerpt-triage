@@ -40,8 +40,24 @@ describe("QAView focused state", () => {
     const history = screen.getByLabelText("问答历史");
 
     expect(within(history).getByRole("button", { name: /第二条问题/ })).toHaveAttribute("data-state", "selected");
+    expect(within(history).getByRole("button", { name: /第二条问题/ })).toHaveAttribute("aria-current", "true");
+    expect(within(history).getByRole("button", { name: /第二条问题/ })).toBeVisible();
+    expect(within(history).getByRole("button", { name: /第二条问题/ })).toHaveTextContent("第二条问题");
+    expect(within(history).getByRole("button", { name: /第二条问题/ })).toContainElement(
+      within(history).getByTestId("qa-history-active-marker"),
+    );
     expect(within(history).getByRole("button", { name: /第一条问题/ })).not.toHaveAttribute("data-state", "selected");
     expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("shows a richer empty state with example questions", () => {
+    render(createElement(QAView, { excerptId: 42, initialMessages: [] }));
+
+    expect(screen.getByText("还没有开始提问")).toBeInTheDocument();
+    expect(screen.getByText("从一条问题开始，让回答区专注展示当前答案。")).toBeInTheDocument();
+    expect(screen.getByText("这篇文章的核心观点是什么？")).toBeInTheDocument();
+    expect(screen.getByText("作者用了哪些例子来支撑结论？")).toBeInTheDocument();
+    expect(screen.getByText("如果我要复述给别人，应该怎么说？")).toBeInTheDocument();
   });
 
   it("renders the focused answer as markdown content", () => {
@@ -125,6 +141,7 @@ describe("QAView focused state", () => {
     expect(within(history).getByRole("button", { name: /第二条问题/ })).toBeInTheDocument();
     expect(screen.queryByText("第一条回答")).not.toBeInTheDocument();
     expect(screen.getByText("第二条回答")).toBeInTheDocument();
+    expect(within(history).getByRole("button", { name: /第二条问题/ })).toHaveAttribute("aria-current", "true");
 
     fireEvent.click(within(history).getByRole("button", { name: /第一条问题/ }));
 
