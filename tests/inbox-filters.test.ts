@@ -1,44 +1,47 @@
-import test from "node:test";
-import assert from "node:assert/strict";
+import { describe, expect, it } from "vitest";
 
-const helperModuleUrl = new URL("../src/lib/inbox-filters.ts", import.meta.url).href;
-const {
+import {
   buildTagFilterOptions,
   expandSourceTypeFilter,
   isStaleInboxResponse,
   shouldSkipInboxLoad,
-}: typeof import("../src/lib/inbox-filters") = await import(helperModuleUrl);
+} from "../src/lib/inbox-filters";
 
-test("expandSourceTypeFilter includes known legacy aliases under the canonical source filter", () => {
-  assert.deepEqual(expandSourceTypeFilter("article"), ["article", "web"]);
-  assert.deepEqual(expandSourceTypeFilter("report"), ["report", "report/paper"]);
-  assert.deepEqual(expandSourceTypeFilter("social"), ["social"]);
-});
+describe("inbox filters", () => {
+  it("expands canonical source filters with known legacy aliases", () => {
+    expect(expandSourceTypeFilter("article")).toEqual(["article", "web"]);
+    expect(expandSourceTypeFilter("report")).toEqual(["report", "report/paper"]);
+    expect(expandSourceTypeFilter("social")).toEqual(["social"]);
+  });
 
-test("buildTagFilterOptions merges vocabulary tags with real database tags without duplicates", () => {
-  const options = buildTagFilterOptions(
-    ["ai-coding", "openclaw", "workflow"],
-    [
-      { tag: "clip", count: 169 },
-      { tag: "openclaw", count: 102 },
-      { tag: "use_case/部署", count: 81 },
-    ]
-  );
+  it("merges vocabulary tags with database tags without duplicates", () => {
+    const options = buildTagFilterOptions(
+      ["ai-coding", "openclaw", "workflow"],
+      [
+        { tag: "clip", count: 169 },
+        { tag: "openclaw", count: 102 },
+        { tag: "use_case/部署", count: 81 },
+      ],
+    );
 
-  assert.deepEqual(
-    options.map((option) => option.value),
-    ["clip", "openclaw", "use_case/部署", "ai-coding", "workflow"]
-  );
-  assert.equal(options.find((option) => option.value === "clip")?.count, 169);
-});
+    expect(options.map((option) => option.value)).toEqual([
+      "clip",
+      "openclaw",
+      "use_case/部署",
+      "ai-coding",
+      "workflow",
+    ]);
+    expect(options.find((option) => option.value === "clip")?.count).toBe(169);
+  });
 
-test("shouldSkipInboxLoad only blocks pagination while a request is already in flight", () => {
-  assert.equal(shouldSkipInboxLoad({ loading: false, reset: false }), false);
-  assert.equal(shouldSkipInboxLoad({ loading: true, reset: false }), true);
-  assert.equal(shouldSkipInboxLoad({ loading: true, reset: true }), false);
-});
+  it("only blocks pagination while a request is already in flight", () => {
+    expect(shouldSkipInboxLoad({ loading: false, reset: false })).toBe(false);
+    expect(shouldSkipInboxLoad({ loading: true, reset: false })).toBe(true);
+    expect(shouldSkipInboxLoad({ loading: true, reset: true })).toBe(false);
+  });
 
-test("isStaleInboxResponse identifies older requests so they do not overwrite newer filters", () => {
-  assert.equal(isStaleInboxResponse({ requestId: 1, latestRequestId: 2 }), true);
-  assert.equal(isStaleInboxResponse({ requestId: 2, latestRequestId: 2 }), false);
+  it("marks older inbox responses as stale", () => {
+    expect(isStaleInboxResponse({ requestId: 1, latestRequestId: 2 })).toBe(true);
+    expect(isStaleInboxResponse({ requestId: 2, latestRequestId: 2 })).toBe(false);
+  });
 });
