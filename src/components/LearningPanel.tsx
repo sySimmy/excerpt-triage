@@ -55,6 +55,8 @@ const EMPTY_CACHE: MaterialCache = {
   qa: null,
 };
 
+const ARCHIVE_CONFIRMATION_MESSAGE = "确定归档这篇文章？";
+
 interface LearningPanelProps {
   excerpt: ExcerptInfo | null;
   onFinish: (id: number) => void;
@@ -168,6 +170,7 @@ export default function LearningPanel({ excerpt, onFinish }: LearningPanelProps)
 
   async function handleFinish() {
     if (!excerpt || archiving) return;
+    if (!confirm(ARCHIVE_CONFIRMATION_MESSAGE)) return;
     setArchiving(true);
     try {
       const res = await fetch("/api/learning/archive", {

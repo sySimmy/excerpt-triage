@@ -47,6 +47,8 @@ const SOURCE_OPTIONS = [
   { value: "report", label: "Report" },
 ];
 
+const ARCHIVE_CONFIRMATION_MESSAGE = "确定归档这篇文章？";
+
 export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, onDeleted, onNext, onDeepRead, onUnarchived, onStartLearning, archiveMode, deepReadMode, translationState, onTranslate }: ReadingPanelProps) {
   const [excerpt, setExcerpt] = useState<ExcerptDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -312,6 +314,7 @@ export default function ReadingPanel({ excerptId, tagSuggestions, onArchived, on
   // Archive
   async function handleArchive() {
     if (!excerptId || archiving) return;
+    if (!confirm(ARCHIVE_CONFIRMATION_MESSAGE)) return;
     setArchiving(true);
     try {
       // Save tag feedback before archiving
