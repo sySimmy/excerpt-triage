@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import QAView from "./QAView";
@@ -37,8 +37,10 @@ describe("QAView focused state", () => {
   it("keeps the latest message selected by default and does not auto-scroll the transcript", () => {
     render(createElement(QAView, { excerptId: 42, initialMessages }));
 
-    expect(screen.getByText("第二条问题").closest("[data-state='selected']")).not.toBeNull();
-    expect(screen.getByText("第一条问题").closest("[data-state='selected']")).toBeNull();
+    const history = screen.getByLabelText("问答历史");
+
+    expect(within(history).getByRole("button", { name: /第二条问题/ })).toHaveAttribute("data-state", "selected");
+    expect(within(history).getByRole("button", { name: /第一条问题/ })).not.toHaveAttribute("data-state", "selected");
     expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
   });
 
@@ -78,6 +80,26 @@ describe("QAView focused state", () => {
     );
 
     await waitFor(() => expect(screen.getByText("聚焦后的回答")).toBeInTheDocument());
-    expect(screen.getByText("聚焦问题是什么？").closest("[data-state='selected']")).not.toBeNull();
+    expect(screen.getByLabelText("问答历史")).toBeInTheDocument();
+    expect(within(screen.getByLabelText("问答历史")).getByRole("button", { name: /聚焦问题是什么/ })).toHaveAttribute(
+      "data-state",
+      "selected",
+    );
+  });
+
+  it("shows only the focused answer and lets history buttons switch the reader pane", () => {
+    render(createElement(QAView, { excerptId: 42, initialMessages }));
+
+    const history = screen.getByLabelText("问答历史");
+
+    expect(within(history).getByRole("button", { name: /第一条问题/ })).toBeInTheDocument();
+    expect(within(history).getByRole("button", { name: /第二条问题/ })).toBeInTheDocument();
+    expect(screen.queryByText("第一条回答")).not.toBeInTheDocument();
+    expect(screen.getByText("第二条回答")).toBeInTheDocument();
+
+    fireEvent.click(within(history).getByRole("button", { name: /第一条问题/ }));
+
+    expect(screen.getByText("第一条回答")).toBeInTheDocument();
+    expect(screen.queryByText("第二条回答")).not.toBeInTheDocument();
   });
 });

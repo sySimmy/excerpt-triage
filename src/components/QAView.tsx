@@ -13,6 +13,20 @@ interface QAViewProps {
   initialMessages?: QAMessage[];
 }
 
+function formatTimestamp(timestamp: string) {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return timestamp;
+  }
+
+  return date.toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export default function QAView({ excerptId, initialMessages = [] }: QAViewProps) {
   const [messages, setMessages] = useState<QAMessage[]>(initialMessages);
   const [input, setInput] = useState("");
@@ -75,55 +89,78 @@ export default function QAView({ excerptId, initialMessages = [] }: QAViewProps)
     }
   }
 
+  const pendingSelected = pendingQuestion !== null && selectedIndex === messages.length;
+  const selectedMessage = selectedIndex >= 0 && selectedIndex < messages.length ? messages[selectedIndex] : null;
+  const focusedQuestion = pendingSelected ? pendingQuestion : selectedMessage?.question ?? null;
+
   return (
     <div className="h-full flex flex-col">
-      {/* Message history */}
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-        {messages.length === 0 && !thinking && !pendingQuestion && (
-          <div className="h-full flex items-center justify-center text-[var(--text-secondary)] text-sm">
-            对这篇文章提问吧
-          </div>
-        )}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="h-full flex flex-col md:grid md:grid-cols-[240px_minmax(0,1fr)]">
+          <aside
+            aria-label="问答历史"
+            className="border-b border-[var(--border)] bg-[var(--bg-secondary)] md:border-b-0 md:border-r"
+          >
+            <div className="flex gap-2 overflow-x-auto px-3 py-3 md:flex-col md:overflow-y-auto md:px-3 md:py-4">
+              {messages.map((msg, i) => {
+                const isSelected = i === selectedIndex;
+                return (
+                  <button
+                    key={msg.timestamp}
+                    type="button"
+                    onClick={() => setSelectedIndex(i)}
+                    data-state={isSelected ? "selected" : undefined}
+                    aria-pressed={isSelected}
+                    className={`min-w-[180px] rounded-lg border px-3 py-2 text-left transition-colors md:min-w-0 ${
+                      isSelected
+                        ? "border-[var(--accent)]/40 bg-[var(--accent)]/10 text-[var(--text)]"
+                        : "border-[var(--border)] bg-[var(--bg-tertiary)]/60 text-[var(--text-secondary)] hover:text-[var(--text)]"
+                    }`}
+                  >
+                    <div className="truncate text-sm font-medium">{msg.question}</div>
+                    <div className="mt-1 text-xs text-[var(--text-secondary)]">{formatTimestamp(msg.timestamp)}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
 
-        {messages.map((msg, i) => (
-          <div key={msg.timestamp} data-state={i === selectedIndex ? "selected" : undefined} className="space-y-2">
-            {/* Question — right aligned */}
-            <div className="flex justify-end">
-              <div className="max-w-xs lg:max-w-md px-3 py-2 rounded-lg bg-[var(--accent)]/20 border border-[var(--accent)]/30 text-sm text-[var(--text)] text-right">
-                {msg.question}
+          <section className="min-h-0 flex flex-1 flex-col overflow-hidden">
+            <div
+              data-state={pendingSelected ? "pending" : focusedQuestion ? "selected" : undefined}
+              className="border-b border-[var(--border)] bg-[var(--bg-secondary)] px-4 py-3"
+            >
+              <div className="text-xs uppercase tracking-[0.16em] text-[var(--text-secondary)]">当前问题</div>
+              <div className="mt-2 text-sm font-medium text-[var(--text)]">
+                {focusedQuestion ?? "从历史列表中选择一个问题，或直接开始新的追问"}
               </div>
             </div>
-            {/* Answer — left aligned */}
-            <div className="flex justify-start">
-              <div className="max-w-xs lg:max-w-md px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border)] text-sm text-[var(--text-secondary)] leading-relaxed">
-                {msg.answer}
-              </div>
-            </div>
-          </div>
-        ))}
 
-        {pendingQuestion && (
-          <div data-state={selectedIndex === messages.length ? "pending" : undefined} className="space-y-2">
-            <div className="flex justify-end">
-              <div className="max-w-xs lg:max-w-md px-3 py-2 rounded-lg bg-[var(--accent)]/20 border border-[var(--accent)]/30 text-sm text-[var(--text)] text-right">
-                {pendingQuestion}
-              </div>
-            </div>
-            <div className="flex justify-start">
-              <div className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border)] text-sm text-[var(--text-secondary)] italic">
-                思考中...
-              </div>
-            </div>
-          </div>
-        )}
+            <div className="flex-1 overflow-y-auto px-4 py-4">
+              {selectedMessage && !pendingSelected && (
+                <div className="mx-auto max-w-3xl rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] px-5 py-5 text-sm leading-relaxed text-[var(--text)]">
+                  {selectedMessage.answer}
+                </div>
+              )}
 
-        {thinking && !pendingQuestion && (
-          <div className="flex justify-start">
-            <div className="px-3 py-2 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border)] text-sm text-[var(--text-secondary)] italic">
-              思考中...
+              {pendingSelected && (
+                <div className="mx-auto max-w-3xl rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] px-5 py-5">
+                  <div className="space-y-3" aria-label="回答生成中">
+                    <div className="h-3 w-5/6 animate-pulse rounded bg-[var(--bg-tertiary)]" />
+                    <div className="h-3 w-full animate-pulse rounded bg-[var(--bg-tertiary)]" />
+                    <div className="h-3 w-4/5 animate-pulse rounded bg-[var(--bg-tertiary)]" />
+                  </div>
+                </div>
+              )}
+
+              {!selectedMessage && !pendingSelected && (
+                <div className="flex h-full items-center justify-center text-center text-sm text-[var(--text-secondary)]">
+                  对这篇文章提问吧
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          </section>
+        </div>
       </div>
 
       {/* Input area */}
